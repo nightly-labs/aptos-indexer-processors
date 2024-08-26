@@ -194,7 +194,6 @@ async fn parse_v2_token(transactions: &[Transaction]) {
         };
         let (events, maybe_user_request): (&Vec<Event>, Option<&UserTransactionRequest>) =
             match txn_data {
-                TxnData::Genesis(inner) => (&inner.events, None),
                 TxnData::User(inner) => (&inner.events, inner.request.as_ref()),
                 _ => return,
             };
