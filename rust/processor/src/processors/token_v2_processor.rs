@@ -4,7 +4,16 @@
 use super::{DefaultProcessingResult, ProcessorName, ProcessorTrait};
 use crate::{
     db::common::models::{
-        fungible_asset_models::v2_fungible_asset_utils::FungibleAssetMetadata,
+        coin_models::{
+            coin_activities::CoinActivity,
+            coin_balances::{CoinBalance, CurrentCoinBalance},
+            coin_infos::CoinInfo,
+            coin_utils::CoinEvent,
+        },
+        fungible_asset_models::{
+            v2_fungible_asset_activities::{CoinType, CurrentCoinBalancePK, EventToCoinType},
+            v2_fungible_asset_utils::{FeeStatement, FungibleAssetMetadata},
+        },
         object_models::v2_object_utils::{
             ObjectAggregatedData, ObjectAggregatedDataMapping, ObjectWithMetadata, Untransferable,
         },
@@ -43,9 +52,11 @@ use ahash::{AHashMap, AHashSet};
 use anyhow::bail;
 use aptos_protos::transaction::v1::{
     move_type::Content, transaction::TxnData, transaction_payload::Payload,
-    write_set_change::Change, EntryFunctionPayload, Transaction, TransactionPayload,
+    write_set_change::Change, EntryFunctionPayload, Event, Transaction, TransactionPayload,
+    UserTransactionRequest,
 };
 use async_trait::async_trait;
+use chrono::NaiveDateTime;
 use diesel::{
     pg::{upsert::excluded, Pg},
     query_builder::QueryFragment,
@@ -164,72 +175,140 @@ impl ProcessorTrait for TokenV2Processor {
 
 async fn parse_v2_token(transactions: &[Transaction]) {
     // Code above is inefficient (multiple passthroughs) so I'm approaching TokenV2 with a cleaner code structure
-    for txn in transactions {
-        println!("txn: {:?}", txn.version);
-        println!("txn_data: {:?}", txn.txn_data);
-        let txn_version = txn.version;
-        let txn_data = match txn.txn_data.as_ref() {
+    for transaction in transactions {
+        // println!("\n\nTXN HERE: {:?}", transaction.version);
+        // println!("txn_data: {:?}", transaction.txn_data);
+        // All the items we want to track
+        let mut coin_activities = Vec::new();
+        let mut coin_balances = Vec::new();
+        let mut coin_infos: AHashMap<CoinType, CoinInfo> = AHashMap::new();
+        let mut current_coin_balances: AHashMap<CurrentCoinBalancePK, CurrentCoinBalance> =
+            AHashMap::new();
+        // This will help us get the coin type when we see coin deposit/withdraw events for coin activities
+        let mut all_event_to_coin_type: EventToCoinType = AHashMap::new();
+
+        // Extracts events and user request from genesis and user transactions. Other transactions won't have coin events
+        let txn_data = match transaction.txn_data.as_ref() {
             Some(data) => data,
             None => {
                 PROCESSOR_UNKNOWN_TYPE_COUNT
-                    .with_label_values(&["TokenV2Processor"])
+                    .with_label_values(&["CoinActivity"])
                     .inc();
                 tracing::warn!(
-                    transaction_version = txn_version,
-                    "Transaction data doesn't exist"
+                    transaction_version = transaction.version,
+                    "Transaction data doesn't exist",
                 );
-                continue;
+                return Default::default();
             },
         };
-        let txn_version = txn.version as i64;
-        let txn_timestamp = parse_timestamp(txn.timestamp.as_ref().unwrap(), txn_version);
-        let transaction_info = txn.info.as_ref().expect("Transaction info doesn't exist!");
+        let (events, maybe_user_request): (&Vec<Event>, Option<&UserTransactionRequest>) =
+            match txn_data {
+                TxnData::Genesis(inner) => (&inner.events, None),
+                TxnData::User(inner) => (&inner.events, inner.request.as_ref()),
+                _ => return Default::default(),
+            };
 
-        if let TxnData::User(user_txn) = txn_data {
-            if let Some(request) = user_txn.request.as_ref() {
-                if let Some(payload) = request.payload.as_ref() {
-                    if let Some(payload) = payload.payload.as_ref() {
-                        match payload {
-                            Payload::EntryFunctionPayload(EntryFunctionPayload {
-                                function,
-                                type_arguments,
-                                arguments,
-                                entry_function_id_str,
-                            }) => {
-                                println!("function: {:?}", function);
-                                println!("type_arguments: {:?}", type_arguments);
-                                for argument in type_arguments {
-                                    if let Some(content) = &argument.content {
-                                        match content {
-                                            Content::Struct(tag) => {
-                                                println!("token : {:?}", tag.address);
-                                            },
-                                            _ => {},
-                                        }
-                                    }
-                                }
+        // The rest are fields common to all transactions
+        let txn_version = transaction.version as i64;
+        let block_height = transaction.block_height as i64;
+        let transaction_info = transaction
+            .info
+            .as_ref()
+            .expect("Transaction info doesn't exist!");
+        let txn_timestamp = transaction
+            .timestamp
+            .as_ref()
+            .expect("Transaction timestamp doesn't exist!")
+            .seconds;
+        #[allow(deprecated)]
+        let txn_timestamp =
+            NaiveDateTime::from_timestamp_opt(txn_timestamp, 0).expect("Txn Timestamp is invalid!");
 
-                                println!("arguments: {:?}", arguments);
-                                println!("entry_function_id_str: {:?}", entry_function_id_str);
-                            },
-                            _ => {},
-                        }
-                    }
-                }
+        // Handling gas first
+        let mut entry_function_id_str = None;
+        if let Some(user_request) = maybe_user_request {
+            let fee_statement = events.iter().find_map(|event| {
+                let event_type = event.type_str.as_str();
+                FeeStatement::from_event(event_type, &event.data, txn_version)
+            });
+
+            entry_function_id_str = get_entry_function_from_user_request(user_request);
+            coin_activities.push(CoinActivity::get_gas_event(
+                transaction_info,
+                user_request,
+                &entry_function_id_str,
+                txn_version,
+                txn_timestamp,
+                block_height,
+                fee_statement,
+            ));
+        }
+
+        // Need coin info from move resources
+        for wsc in &transaction_info.changes {
+            let (maybe_coin_info, maybe_coin_balance_data) =
+                if let Change::WriteResource(write_resource) = &wsc.change.as_ref().unwrap() {
+                    (
+                        CoinInfo::from_write_resource(write_resource, txn_version, txn_timestamp)
+                            .unwrap(),
+                        CoinBalance::from_write_resource(
+                            write_resource,
+                            txn_version,
+                            txn_timestamp,
+                        )
+                        .unwrap(),
+                    )
+                } else {
+                    (None, None)
+                };
+
+            if let Some(coin_info) = maybe_coin_info {
+                coin_infos.insert(coin_info.coin_type.clone(), coin_info);
             }
-
-            let user_request = user_txn
-                .request
-                .as_ref()
-                .expect("Sends is not present in user txn");
-            let entry_function_id_str = get_entry_function_from_user_request(user_request);
-
-            // Pass through events to get the burn events and token activities v2
-            // This needs to be here because we need the metadata above for token activities
-            // and burn / transfer events need to come before the next section
-            for (index, event) in user_txn.events.iter().enumerate() {
-                println!("event: {:?}", event);
+            if let Some((coin_balance, current_coin_balance, event_to_coin_type)) =
+                maybe_coin_balance_data
+            {
+                current_coin_balances.insert(
+                    (
+                        coin_balance.owner_address.clone(),
+                        coin_balance.coin_type.clone(),
+                    ),
+                    current_coin_balance,
+                );
+                coin_balances.push(coin_balance);
+                all_event_to_coin_type.extend(event_to_coin_type);
             }
         }
+        for (index, event) in events.iter().enumerate() {
+            let event_type = event.type_str.clone();
+            if let Some(parsed_event) =
+                CoinEvent::from_event(event_type.as_str(), &event.data, txn_version).unwrap()
+            {
+                coin_activities.push(CoinActivity::from_parsed_event(
+                    &event_type,
+                    event,
+                    &parsed_event,
+                    txn_version,
+                    &all_event_to_coin_type,
+                    block_height,
+                    &entry_function_id_str,
+                    txn_timestamp,
+                    index as i64,
+                ));
+            };
+        }
+
+        println!("\n\ncoin_activities: {:?}", coin_activities);
+        println!("coin_balances: {:?}", coin_balances);
+        println!("coin_infos: {:?}", coin_infos);
+        println!("current_coin_balances: {:?}\n", current_coin_balances);
+
+        for (index, event) in events.iter().enumerate() {
+            println!("event: {:?}", event);
+        }
+
+        println!("\n\n\n");
+
+        panic!("stop");
     }
 }

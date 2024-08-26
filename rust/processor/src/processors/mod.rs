@@ -11,6 +11,7 @@ pub mod events_processor;
 pub mod fungible_asset_processor;
 pub mod monitoring_processor;
 pub mod nft_metadata_processor;
+pub mod nightly_processor;
 pub mod objects_processor;
 pub mod parquet_processors;
 pub mod stake_processor;

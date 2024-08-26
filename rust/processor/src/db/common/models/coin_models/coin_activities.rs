@@ -211,7 +211,7 @@ impl CoinActivity {
         )
     }
 
-    fn from_parsed_event(
+    pub fn from_parsed_event(
         event_type: &str,
         event: &EventPB,
         coin_event: &CoinEvent,
