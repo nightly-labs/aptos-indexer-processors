@@ -6,7 +6,7 @@ use crate::{
     db::common::models::{
         coin_models::{
             coin_activities::CoinActivity,
-            coin_balances::{CoinBalance, CurrentCoinBalance},
+            coin_balances::{get_all_event_to_coin_type, CoinBalance, CurrentCoinBalance},
             coin_infos::CoinInfo,
             coin_utils::CoinEvent,
         },
@@ -174,17 +174,8 @@ impl ProcessorTrait for TokenV2Processor {
 }
 
 async fn parse_v2_token(transactions: &[Transaction]) {
-    // Code above is inefficient (multiple passthroughs) so I'm approaching TokenV2 with a cleaner code structure
     for transaction in transactions {
-        // println!("\n\nTXN HERE: {:?}", transaction.version);
-        // println!("txn_data: {:?}", transaction.txn_data);
-        // All the items we want to track
         let mut coin_activities = Vec::new();
-        let mut coin_balances = Vec::new();
-        let mut coin_infos: AHashMap<CoinType, CoinInfo> = AHashMap::new();
-        let mut current_coin_balances: AHashMap<CurrentCoinBalancePK, CurrentCoinBalance> =
-            AHashMap::new();
-        // This will help us get the coin type when we see coin deposit/withdraw events for coin activities
         let mut all_event_to_coin_type: EventToCoinType = AHashMap::new();
 
         // Extracts events and user request from genesis and user transactions. Other transactions won't have coin events
@@ -205,7 +196,7 @@ async fn parse_v2_token(transactions: &[Transaction]) {
             match txn_data {
                 TxnData::Genesis(inner) => (&inner.events, None),
                 TxnData::User(inner) => (&inner.events, inner.request.as_ref()),
-                _ => return Default::default(),
+                _ => return,
             };
 
         // The rest are fields common to all transactions
@@ -245,47 +236,22 @@ async fn parse_v2_token(transactions: &[Transaction]) {
         }
 
         // Need coin info from move resources
-        for wsc in &transaction_info.changes {
-            let (maybe_coin_info, maybe_coin_balance_data) =
-                if let Change::WriteResource(write_resource) = &wsc.change.as_ref().unwrap() {
-                    (
-                        CoinInfo::from_write_resource(write_resource, txn_version, txn_timestamp)
-                            .unwrap(),
-                        CoinBalance::from_write_resource(
-                            write_resource,
-                            txn_version,
-                            txn_timestamp,
-                        )
-                        .unwrap(),
-                    )
-                } else {
-                    (None, None)
-                };
-
-            if let Some(coin_info) = maybe_coin_info {
-                coin_infos.insert(coin_info.coin_type.clone(), coin_info);
-            }
-            if let Some((coin_balance, current_coin_balance, event_to_coin_type)) =
-                maybe_coin_balance_data
-            {
-                current_coin_balances.insert(
-                    (
-                        coin_balance.owner_address.clone(),
-                        coin_balance.coin_type.clone(),
-                    ),
-                    current_coin_balance,
-                );
-                coin_balances.push(coin_balance);
-                all_event_to_coin_type.extend(event_to_coin_type);
+        for change in &transaction_info.changes {
+            if let Some(Change::WriteResource(write_resource)) = change.change.as_ref() {
+                if let Some(event_to_coin_type) =
+                    get_all_event_to_coin_type(write_resource, txn_version).unwrap()
+                {
+                    all_event_to_coin_type.extend(event_to_coin_type);
+                }
             }
         }
+
         for (index, event) in events.iter().enumerate() {
-            let event_type = event.type_str.clone();
             if let Some(parsed_event) =
-                CoinEvent::from_event(event_type.as_str(), &event.data, txn_version).unwrap()
+                CoinEvent::from_event(&event.type_str, &event.data, txn_version).unwrap()
             {
                 coin_activities.push(CoinActivity::from_parsed_event(
-                    &event_type,
+                    &event.type_str,
                     event,
                     &parsed_event,
                     txn_version,
@@ -295,19 +261,10 @@ async fn parse_v2_token(transactions: &[Transaction]) {
                     txn_timestamp,
                     index as i64,
                 ));
-            };
+            }
         }
 
-        println!("\n\ncoin_activities: {:?}", coin_activities);
-        println!("coin_balances: {:?}", coin_balances);
-        println!("coin_infos: {:?}", coin_infos);
-        println!("current_coin_balances: {:?}\n", current_coin_balances);
-
-        for (index, event) in events.iter().enumerate() {
-            println!("event: {:?}", event);
-        }
-
-        println!("\n\n\n");
+        println!("\n\ncoin_activities: {:#?}\n", coin_activities);
 
         panic!("stop");
     }
