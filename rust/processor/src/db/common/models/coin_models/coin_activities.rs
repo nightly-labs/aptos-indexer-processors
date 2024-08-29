@@ -187,7 +187,7 @@ impl CoinActivity {
         }
         for (index, event) in events.iter().enumerate() {
             let event_type = event.type_str.clone();
-            if let Some(parsed_event) =
+            if let Some((parsed_event, _)) =
                 CoinEvent::from_event(event_type.as_str(), &event.data, txn_version).unwrap()
             {
                 coin_activities.push(Self::from_parsed_event(

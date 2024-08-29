@@ -894,7 +894,7 @@ async fn parse_v2_token(
                     }
                 }
                 // handling all the token v1 events
-                if let Some(event) = TokenActivityV2::get_v1_from_parsed_event(
+                if let Some((event, _)) = TokenActivityV2::get_v1_from_parsed_event(
                     event,
                     txn_version,
                     txn_timestamp,
@@ -906,7 +906,7 @@ async fn parse_v2_token(
                     token_activities_v2.push(event);
                 }
                 // handling all the token v2 events
-                if let Some(event) = TokenActivityV2::get_nft_v2_from_parsed_event(
+                if let Some((event, _)) = TokenActivityV2::get_nft_v2_from_parsed_event(
                     event,
                     txn_version,
                     txn_timestamp,
@@ -914,10 +914,9 @@ async fn parse_v2_token(
                     &entry_function_id_str,
                     &token_v2_metadata_helper,
                 )
-                .await
                 .unwrap()
                 {
-                    token_activities_v2.push(event);
+                    token_activities_v2.push((event));
                 }
             }
 
@@ -1144,7 +1143,6 @@ async fn parse_v2_token(
                                 txn_timestamp,
                                 &tokens_burned,
                             )
-                            .await
                             .unwrap()
                         {
                             current_deleted_token_datas_v2.insert(
@@ -1215,7 +1213,6 @@ async fn parse_v2_token(
                                 txn_timestamp,
                                 &tokens_burned,
                             )
-                            .await
                             .unwrap()
                         {
                             current_deleted_token_datas_v2.insert(

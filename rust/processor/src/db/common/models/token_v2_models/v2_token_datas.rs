@@ -151,7 +151,7 @@ impl TokenDataV2 {
     }
 
     /// This handles the case where token is burned but objectCore is still there
-    pub async fn get_burned_nft_v2_from_write_resource(
+    pub fn get_burned_nft_v2_from_write_resource(
         write_resource: &WriteResource,
         txn_version: i64,
         txn_timestamp: chrono::NaiveDateTime,
@@ -183,7 +183,7 @@ impl TokenDataV2 {
     }
 
     /// This handles the case where token is burned and objectCore is deleted
-    pub async fn get_burned_nft_v2_from_delete_resource(
+    pub fn get_burned_nft_v2_from_delete_resource(
         delete_resource: &DeleteResource,
         txn_version: i64,
         txn_timestamp: chrono::NaiveDateTime,

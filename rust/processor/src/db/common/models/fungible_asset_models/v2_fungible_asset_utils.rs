@@ -363,27 +363,33 @@ pub enum FungibleAssetEvent {
     FrozenEventV2(FrozenEventV2),
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum CoinAction {
+    Deposit,
+    Withdraw,
+    Freeze,
+    Gas,
+}
+
 impl FungibleAssetEvent {
-    pub fn from_event(data_type: &str, data: &str, txn_version: i64) -> Result<Option<Self>> {
+    pub fn from_event(
+        data_type: &str,
+        data: &str,
+        txn_version: i64,
+    ) -> Result<Option<(Self, CoinAction)>> {
         match data_type {
-            "0x1::fungible_asset::DepositEvent" => {
-                serde_json::from_str(data).map(|inner| Some(Self::DepositEvent(inner)))
-            },
-            "0x1::fungible_asset::WithdrawEvent" => {
-                serde_json::from_str(data).map(|inner| Some(Self::WithdrawEvent(inner)))
-            },
-            "0x1::fungible_asset::FrozenEvent" => {
-                serde_json::from_str(data).map(|inner| Some(Self::FrozenEvent(inner)))
-            },
-            "0x1::fungible_asset::Deposit" => {
-                serde_json::from_str(data).map(|inner| Some(Self::DepositEventV2(inner)))
-            },
-            "0x1::fungible_asset::Withdraw" => {
-                serde_json::from_str(data).map(|inner| Some(Self::WithdrawEventV2(inner)))
-            },
-            "0x1::fungible_asset::Frozen" => {
-                serde_json::from_str(data).map(|inner| Some(Self::FrozenEventV2(inner)))
-            },
+            "0x1::fungible_asset::DepositEvent" => serde_json::from_str(data)
+                .map(|inner| Some((Self::DepositEvent(inner), CoinAction::Deposit))),
+            "0x1::fungible_asset::WithdrawEvent" => serde_json::from_str(data)
+                .map(|inner| Some((Self::WithdrawEvent(inner), CoinAction::Withdraw))),
+            "0x1::fungible_asset::FrozenEvent" => serde_json::from_str(data)
+                .map(|inner| Some((Self::FrozenEvent(inner), CoinAction::Freeze))),
+            "0x1::fungible_asset::Deposit" => serde_json::from_str(data)
+                .map(|inner| Some((Self::DepositEventV2(inner), CoinAction::Deposit))),
+            "0x1::fungible_asset::Withdraw" => serde_json::from_str(data)
+                .map(|inner| Some((Self::WithdrawEventV2(inner), CoinAction::Withdraw))),
+            "0x1::fungible_asset::Frozen" => serde_json::from_str(data)
+                .map(|inner| Some((Self::FrozenEventV2(inner), CoinAction::Freeze))),
             _ => Ok(None),
         }
         .context(format!(

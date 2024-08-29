@@ -623,7 +623,7 @@ async fn parse_v2_coin(
 
         // Loop to handle events and collect additional metadata from events for v2
         for (index, event) in events.iter().enumerate() {
-            if let Some(v1_activity) = FungibleAssetActivity::get_v1_from_event(
+            if let Some((v1_activity, _action)) = FungibleAssetActivity::get_v1_from_event(
                 event,
                 txn_version,
                 block_height,
@@ -642,7 +642,7 @@ async fn parse_v2_coin(
             }) {
                 fungible_asset_activities.push(v1_activity);
             }
-            if let Some(v2_activity) = FungibleAssetActivity::get_v2_from_event(
+            if let Some((v2_activity, _action)) = FungibleAssetActivity::get_v2_from_event(
                 event,
                 txn_version,
                 block_height,
@@ -651,7 +651,6 @@ async fn parse_v2_coin(
                 &entry_function_id_str,
                 &fungible_asset_object_helper,
             )
-            .await
             .unwrap_or_else(|e| {
                 tracing::error!(
                     transaction_version = txn_version,
@@ -711,7 +710,6 @@ async fn parse_v2_coin(
                             txn_timestamp,
                             &fungible_asset_object_helper,
                         )
-                        .await
                         .unwrap_or_else(|e| {
                             tracing::error!(
                             transaction_version = txn_version,
