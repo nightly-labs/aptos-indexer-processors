@@ -111,7 +111,10 @@ postgres-native-tls = "0.5.0"
 tokio-postgres = "0.7.10"
 
 # Parquet support
-parquet = { version = "52.0.0", default-features = false, features = ["async", "lz4"] }
+parquet = { version = "52.0.0", default-features = false, features = [
+    "async",
+    "lz4",
+] }
 num = "0.4.0"
 google-cloud-storage = "0.13.0"
 hyper = { version = "0.14.18", features = ["full"] }
@@ -119,3 +122,5 @@ parquet_derive = { version = "52.0.0" }
 canonical_json = "0.5.0"
 allocative = "0.3.3"
 allocative_derive = "0.3.3"
+
+odin = { git = "ssh://git@github.com/nightly-labs/alexandria.git", rev = "e8754b584a8b3836f105406a6ac7b097c420d4fd", package = "odin" }

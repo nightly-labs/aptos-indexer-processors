@@ -17,6 +17,7 @@ use crate::{
         fungible_asset_processor::FungibleAssetProcessor,
         monitoring_processor::MonitoringProcessor,
         nft_metadata_processor::NftMetadataProcessor,
+        nightly_processor::NightlyProcessor,
         objects_processor::ObjectsProcessor,
         parquet_processors::{
             parquet_ans_processor::ParquetAnsProcessor,
@@ -948,6 +949,9 @@ pub fn build_processor(
         ProcessorConfig::UserTransactionProcessor => Processor::from(
             UserTransactionProcessor::new(db_pool, per_table_chunk_sizes, deprecated_tables),
         ),
+        ProcessorConfig::NightlyProcessor(config) => {
+            Processor::from(NightlyProcessor::new(db_pool, config.clone()))
+        },
         ProcessorConfig::ParquetDefaultProcessor(config) => {
             Processor::from(ParquetDefaultProcessor::new(
                 db_pool,
