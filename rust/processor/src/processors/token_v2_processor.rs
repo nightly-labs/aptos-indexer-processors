@@ -7,11 +7,9 @@ use crate::db::common::models::token_models::token_claims::CurrentTokenPendingCl
 use crate::db::common::models::token_models::tokens::{
     CurrentTokenPendingClaimPK, TableMetadataForToken,
 };
-use crate::db::common::models::token_v2_models::v1_token_royalty::CurrentTokenRoyaltyV1;
-use crate::db::common::models::token_v2_models::v2_collections::{
-    CollectionV2, CurrentCollectionV2, CurrentCollectionV2PK,
+use crate::db::common::models::token_v2_models::v2_token_activities::{
+    TokenAction, TokenActivityV2,
 };
-use crate::db::common::models::token_v2_models::v2_token_activities::TokenActivityV2;
 use crate::db::common::models::token_v2_models::v2_token_datas::{
     CurrentTokenDataV2, CurrentTokenDataV2PK, TokenDataV2,
 };
@@ -117,34 +115,7 @@ impl ProcessorTrait for TokenV2Processor {
         let processing_start = std::time::Instant::now();
         let last_transaction_timestamp = transactions.last().unwrap().timestamp.clone();
 
-        // First get all token related table metadata from the batch of transactions. This is in case
-        // an earlier transaction has metadata (in resources) that's missing from a later transaction.
-        let table_handle_to_owner =
-            TableMetadataForToken::get_table_handle_to_owner_from_transactions(&transactions);
-
-        parse_v2_token(&transactions, table_handle_to_owner).await;
-        // Token V2 processing which includes token v1
-        // let (
-        //     mut collections_v2,
-        //     mut token_datas_v2,
-        //     mut token_ownerships_v2,
-        //     current_collections_v2,
-        //     current_token_datas_v2,
-        //     current_deleted_token_datas_v2,
-        //     current_token_ownerships_v2,
-        //     current_deleted_token_ownerships_v2,
-        //     token_activities_v2,
-        //     mut current_token_v2_metadata,
-        //     current_token_royalties_v1,
-        //     current_token_claims,
-        // ) = parse_v2_token(
-        //     &transactions,
-        //     &table_handle_to_owner,
-        //     &mut conn,
-        //     query_retries,
-        //     query_retry_delay_ms,
-        // )
-        // .await;
+        parse_v2_token(&transactions);
 
         let processing_duration_in_secs = processing_start.elapsed().as_secs_f64();
         let db_insertion_start = std::time::Instant::now();
@@ -170,12 +141,10 @@ impl ProcessorTrait for TokenV2Processor {
 pub struct TransactionChanges {
     pub txn_version: i64,
     pub coin_changes: TransactionCoinChanges,
+    pub token_changes: TransactionTokenChanges,
 }
 
-async fn parse_v2_token(
-    transactions: &[Transaction],
-    table_handle_to_owner: AHashMap<String, TableMetadataForToken>,
-) -> Vec<TransactionChanges> {
+fn parse_v2_token(transactions: &[Transaction]) -> Vec<TransactionChanges> {
     let mut transaction_changes = vec![];
 
     for txn in transactions {
@@ -220,44 +189,29 @@ async fn parse_v2_token(
             _ => (&default, None, None),
         };
 
-        // let transaction_coin_changes = process_transaction_coins_changes(
-        //     txn_version,
-        //     block_height,
-        //     transaction_info,
-        //     txn_timestamp,
-        //     events,
-        //     &user_request.cloned(),
-        //     &entry_function_id_str,
-        // );
-
-        // // Check if any token activity is about frozing a token
-        // let is_frozen = transaction_coin_changes
-        //     .asset_activities
-        //     .iter()
-        //     .any(|activity| activity.0.is_frozen.unwrap_or(false) == true);
-        // if !transaction_coin_changes.asset_activities.is_empty() && is_frozen {
-        //     println!(
-        //         "\n\ntxn_version: {}, block height {}",
-        //         txn_version, block_height
-        //     );
-        //     println!("{:#?}", transaction_coin_changes);
-        //     panic!("STOP");
-        // }
-
-        // transaction_changes.push(TransactionChanges {
-        //     txn_version,
-        //     coin_changes: transaction_coin_changes,
-        // });
+        let transaction_coin_changes = process_transaction_coins_changes(
+            txn_version,
+            block_height,
+            transaction_info,
+            txn_timestamp,
+            events,
+            &user_request.cloned(),
+            &entry_function_id_str,
+        );
 
         let transaction_token_changes = process_transaction_tokens_changes(
             txn_version,
             transaction_info,
             txn_timestamp,
             events,
-            &user_request.cloned(),
             &entry_function_id_str,
-            &table_handle_to_owner,
         );
+
+        transaction_changes.push(TransactionChanges {
+            txn_version,
+            coin_changes: transaction_coin_changes,
+            token_changes: transaction_token_changes,
+        });
     }
 
     transaction_changes
@@ -475,8 +429,7 @@ fn process_transaction_coins_changes(
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionTokenChanges {
     pub txn_version: i64,
-    pub asset_balances: Vec<FungibleAssetBalance>,
-    pub asset_activities: Vec<(FungibleAssetActivity, CoinAction)>,
+    pub token_activities: Vec<(TokenActivityV2, TokenAction)>,
 }
 
 fn process_transaction_tokens_changes(
@@ -484,49 +437,13 @@ fn process_transaction_tokens_changes(
     transaction_info: &TransactionInfo,
     txn_timestamp: NaiveDateTime,
     events: &Vec<Event>,
-    user_request: &Option<UserTransactionRequest>,
     entry_function_id_str: &Option<String>,
-    table_handle_to_owner: &AHashMap<String, TableMetadataForToken>,
-) {
+) -> TransactionTokenChanges {
     // Token V2 and V1 combined
-    let mut collections_v2 = vec![];
-    let mut token_datas_v2 = vec![];
-    let mut token_ownerships_v2 = vec![];
     let mut token_activities_v2 = vec![];
-
-    let mut current_collections_v2: AHashMap<CurrentCollectionV2PK, CurrentCollectionV2> =
-        AHashMap::new();
-    let mut current_token_datas_v2: AHashMap<CurrentTokenDataV2PK, CurrentTokenDataV2> =
-        AHashMap::new();
-    let mut current_deleted_token_datas_v2: AHashMap<CurrentTokenDataV2PK, CurrentTokenDataV2> =
-        AHashMap::new();
-    let mut current_token_ownerships_v2: AHashMap<
-        CurrentTokenOwnershipV2PK,
-        CurrentTokenOwnershipV2,
-    > = AHashMap::new();
-    let mut current_deleted_token_ownerships_v2 = AHashMap::new();
-    // Tracks prior ownership in case a token gets burned
-    let mut prior_nft_ownership: AHashMap<String, NFTOwnershipV2> = AHashMap::new();
-    // Get Metadata for token v2 by object
-    // We want to persist this through the entire batch so that even if a token is burned,
-    // we can still get the object core metadata for it
     let mut token_v2_metadata_helper: ObjectAggregatedDataMapping = AHashMap::new();
-    // Basically token properties
-    let mut current_token_v2_metadata: AHashMap<CurrentTokenV2MetadataPK, CurrentTokenV2Metadata> =
-        AHashMap::new();
-    let mut current_token_royalties_v1: AHashMap<CurrentTokenDataV2PK, CurrentTokenRoyaltyV1> =
-        AHashMap::new();
-    // migrating this from v1 token model as we don't have any replacement table for this
-    let mut all_current_token_claims: AHashMap<
-        CurrentTokenPendingClaimPK,
-        CurrentTokenPendingClaim,
-    > = AHashMap::new();
 
-    // Get burn events for token v2 by object
-    let mut tokens_burned: TokenV2Burned = AHashMap::new();
-
-    // Get mint events for token v2 by object
-    let mut tokens_minted: TokenV2Minted = AHashSet::new();
+    // println!("\n\ntransaction_info: {:#?}", transaction_info);
 
     // Need to do a first pass to get all the objects
     for wsc in transaction_info.changes.iter() {
@@ -600,21 +517,6 @@ fn process_transaction_tokens_changes(
     // This needs to be here because we need the metadata above for token activities
     // and burn / transfer events need to come before the next section
     for (index, event) in events.iter().enumerate() {
-        println!("event: {:?}", event);
-        if let Some(burn_event) = Burn::from_event(event, txn_version).unwrap() {
-            tokens_burned.insert(burn_event.get_token_address(), burn_event);
-        }
-        if let Some(old_burn_event) = BurnEvent::from_event(event, txn_version).unwrap() {
-            let burn_event = Burn::new(
-                standardize_address(event.key.as_ref().unwrap().account_address.as_str()),
-                old_burn_event.get_token_address(),
-                "".to_string(),
-            );
-            tokens_burned.insert(burn_event.get_token_address(), burn_event);
-        }
-        if let Some(mint_event) = MintEvent::from_event(event, txn_version).unwrap() {
-            tokens_minted.insert(mint_event.get_token_address());
-        }
         if let Some(transfer_events) = TransferEvent::from_event(event, txn_version).unwrap() {
             if let Some(aggregated_data) =
                 token_v2_metadata_helper.get_mut(&transfer_events.get_object_address())
@@ -654,408 +556,8 @@ fn process_transaction_tokens_changes(
         }
     }
 
-    for (index, wsc) in transaction_info.changes.iter().enumerate() {
-        let wsc_index = index as i64;
-        match wsc.change.as_ref().unwrap() {
-            Change::WriteTableItem(table_item) => {
-                // if let Some((collection, current_collection)) =
-                //     CollectionV2::get_v1_from_write_table_item(
-                //         table_item,
-                //         txn_version,
-                //         wsc_index,
-                //         txn_timestamp,
-                //         table_handle_to_owner,
-                //         conn,
-                //         query_retries,
-                //         query_retry_delay_ms,
-                //     )
-                //     .await
-                //     .unwrap()
-                // {
-                //     collections_v2.push(collection);
-                //     current_collections_v2
-                //         .insert(current_collection.collection_id.clone(), current_collection);
-                // }
-                if let Some((token_data, current_token_data)) =
-                    TokenDataV2::get_v1_from_write_table_item(
-                        table_item,
-                        txn_version,
-                        wsc_index,
-                        txn_timestamp,
-                    )
-                    .unwrap()
-                {
-                    token_datas_v2.push(token_data);
-                    current_token_datas_v2
-                        .insert(current_token_data.token_data_id.clone(), current_token_data);
-                }
-                if let Some(current_token_royalty) =
-                    CurrentTokenRoyaltyV1::get_v1_from_write_table_item(
-                        table_item,
-                        txn_version,
-                        txn_timestamp,
-                    )
-                    .unwrap()
-                {
-                    current_token_royalties_v1.insert(
-                        current_token_royalty.token_data_id.clone(),
-                        current_token_royalty,
-                    );
-                }
-                if let Some((token_ownership, current_token_ownership)) =
-                    TokenOwnershipV2::get_v1_from_write_table_item(
-                        table_item,
-                        txn_version,
-                        wsc_index,
-                        txn_timestamp,
-                        table_handle_to_owner,
-                    )
-                    .unwrap()
-                {
-                    token_ownerships_v2.push(token_ownership);
-                    if let Some(cto) = current_token_ownership {
-                        prior_nft_ownership.insert(
-                            cto.token_data_id.clone(),
-                            NFTOwnershipV2 {
-                                token_data_id: cto.token_data_id.clone(),
-                                owner_address: cto.owner_address.clone(),
-                                is_soulbound: cto.is_soulbound_v2,
-                            },
-                        );
-                        current_token_ownerships_v2.insert(
-                            (
-                                cto.token_data_id.clone(),
-                                cto.property_version_v1.clone(),
-                                cto.owner_address.clone(),
-                                cto.storage_id.clone(),
-                            ),
-                            cto,
-                        );
-                    }
-                }
-                if let Some(current_token_token_claim) =
-                    CurrentTokenPendingClaim::from_write_table_item(
-                        table_item,
-                        txn_version,
-                        txn_timestamp,
-                        table_handle_to_owner,
-                    )
-                    .unwrap()
-                {
-                    all_current_token_claims.insert(
-                        (
-                            current_token_token_claim.token_data_id_hash.clone(),
-                            current_token_token_claim.property_version.clone(),
-                            current_token_token_claim.from_address.clone(),
-                            current_token_token_claim.to_address.clone(),
-                        ),
-                        current_token_token_claim,
-                    );
-                }
-            },
-            Change::DeleteTableItem(table_item) => {
-                if let Some((token_ownership, current_token_ownership)) =
-                    TokenOwnershipV2::get_v1_from_delete_table_item(
-                        table_item,
-                        txn_version,
-                        wsc_index,
-                        txn_timestamp,
-                        table_handle_to_owner,
-                    )
-                    .unwrap()
-                {
-                    token_ownerships_v2.push(token_ownership);
-                    if let Some(cto) = current_token_ownership {
-                        prior_nft_ownership.insert(
-                            cto.token_data_id.clone(),
-                            NFTOwnershipV2 {
-                                token_data_id: cto.token_data_id.clone(),
-                                owner_address: cto.owner_address.clone(),
-                                is_soulbound: cto.is_soulbound_v2,
-                            },
-                        );
-                        current_deleted_token_ownerships_v2.insert(
-                            (
-                                cto.token_data_id.clone(),
-                                cto.property_version_v1.clone(),
-                                cto.owner_address.clone(),
-                                cto.storage_id.clone(),
-                            ),
-                            cto,
-                        );
-                    }
-                }
-                if let Some(current_token_token_claim) =
-                    CurrentTokenPendingClaim::from_delete_table_item(
-                        table_item,
-                        txn_version,
-                        txn_timestamp,
-                        table_handle_to_owner,
-                    )
-                    .unwrap()
-                {
-                    all_current_token_claims.insert(
-                        (
-                            current_token_token_claim.token_data_id_hash.clone(),
-                            current_token_token_claim.property_version.clone(),
-                            current_token_token_claim.from_address.clone(),
-                            current_token_token_claim.to_address.clone(),
-                        ),
-                        current_token_token_claim,
-                    );
-                }
-            },
-            Change::WriteResource(resource) => {
-                if let Some((collection, current_collection)) =
-                    CollectionV2::get_v2_from_write_resource(
-                        resource,
-                        txn_version,
-                        wsc_index,
-                        txn_timestamp,
-                        &token_v2_metadata_helper,
-                    )
-                    .unwrap()
-                {
-                    collections_v2.push(collection);
-                    current_collections_v2
-                        .insert(current_collection.collection_id.clone(), current_collection);
-                }
-                if let Some((token_data, current_token_data)) =
-                    TokenDataV2::get_v2_from_write_resource(
-                        resource,
-                        txn_version,
-                        wsc_index,
-                        txn_timestamp,
-                        &token_v2_metadata_helper,
-                    )
-                    .unwrap()
-                {
-                    // Add NFT ownership
-                    let (mut ownerships, current_ownerships) =
-                        TokenOwnershipV2::get_nft_v2_from_token_data(
-                            &token_data,
-                            &token_v2_metadata_helper,
-                        )
-                        .unwrap();
-                    if let Some(current_nft_ownership) = ownerships.first() {
-                        // Note that the first element in ownerships is the current ownership. We need to cache
-                        // it in prior_nft_ownership so that moving forward if we see a burn we'll know
-                        // where it came from.
-                        prior_nft_ownership.insert(
-                            current_nft_ownership.token_data_id.clone(),
-                            NFTOwnershipV2 {
-                                token_data_id: current_nft_ownership.token_data_id.clone(),
-                                owner_address: current_nft_ownership
-                                    .owner_address
-                                    .as_ref()
-                                    .unwrap()
-                                    .clone(),
-                                is_soulbound: current_nft_ownership.is_soulbound_v2,
-                            },
-                        );
-                    }
-                    token_ownerships_v2.append(&mut ownerships);
-                    current_token_ownerships_v2.extend(current_ownerships);
-                    token_datas_v2.push(token_data);
-                    current_token_datas_v2
-                        .insert(current_token_data.token_data_id.clone(), current_token_data);
-                }
-
-                // Add burned NFT handling for token datas (can probably be merged with below)
-                if let Some(deleted_token_data) =
-                    TokenDataV2::get_burned_nft_v2_from_write_resource(
-                        resource,
-                        txn_version,
-                        txn_timestamp,
-                        &tokens_burned,
-                    )
-                    .unwrap()
-                {
-                    current_deleted_token_datas_v2
-                        .insert(deleted_token_data.token_data_id.clone(), deleted_token_data);
-                }
-                // Add burned NFT handling
-                // if let Some((nft_ownership, current_nft_ownership)) =
-                //     TokenOwnershipV2::get_burned_nft_v2_from_write_resource(
-                //         resource,
-                //         txn_version,
-                //         wsc_index,
-                //         txn_timestamp,
-                //         &prior_nft_ownership,
-                //         &tokens_burned,
-                //         &token_v2_metadata_helper,
-                //         conn,
-                //         query_retries,
-                //         query_retry_delay_ms,
-                //     )
-                //     .await
-                //     .unwrap()
-                // {
-                //     token_ownerships_v2.push(nft_ownership);
-                //     prior_nft_ownership.insert(
-                //         current_nft_ownership.token_data_id.clone(),
-                //         NFTOwnershipV2 {
-                //             token_data_id: current_nft_ownership.token_data_id.clone(),
-                //             owner_address: current_nft_ownership.owner_address.clone(),
-                //             is_soulbound: current_nft_ownership.is_soulbound_v2,
-                //         },
-                //     );
-                //     current_deleted_token_ownerships_v2.insert(
-                //         (
-                //             current_nft_ownership.token_data_id.clone(),
-                //             current_nft_ownership.property_version_v1.clone(),
-                //             current_nft_ownership.owner_address.clone(),
-                //             current_nft_ownership.storage_id.clone(),
-                //         ),
-                //         current_nft_ownership,
-                //     );
-                // }
-
-                // Track token properties
-                if let Some(token_metadata) = CurrentTokenV2Metadata::from_write_resource(
-                    resource,
-                    txn_version,
-                    &token_v2_metadata_helper,
-                )
-                .unwrap()
-                {
-                    current_token_v2_metadata.insert(
-                        (
-                            token_metadata.object_address.clone(),
-                            token_metadata.resource_type.clone(),
-                        ),
-                        token_metadata,
-                    );
-                }
-            },
-            Change::DeleteResource(resource) => {
-                // Add burned NFT handling for token datas (can probably be merged with below)
-                if let Some(deleted_token_data) =
-                    TokenDataV2::get_burned_nft_v2_from_delete_resource(
-                        resource,
-                        txn_version,
-                        txn_timestamp,
-                        &tokens_burned,
-                    )
-                    .unwrap()
-                {
-                    current_deleted_token_datas_v2
-                        .insert(deleted_token_data.token_data_id.clone(), deleted_token_data);
-                }
-                // if let Some((nft_ownership, current_nft_ownership)) =
-                //     TokenOwnershipV2::get_burned_nft_v2_from_delete_resource(
-                //         resource,
-                //         txn_version,
-                //         wsc_index,
-                //         txn_timestamp,
-                //         &prior_nft_ownership,
-                //         &tokens_burned,
-                //         conn,
-                //         query_retries,
-                //         query_retry_delay_ms,
-                //     )
-                //     .await
-                //     .unwrap()
-                // {
-                //     token_ownerships_v2.push(nft_ownership);
-                //     prior_nft_ownership.insert(
-                //         current_nft_ownership.token_data_id.clone(),
-                //         NFTOwnershipV2 {
-                //             token_data_id: current_nft_ownership.token_data_id.clone(),
-                //             owner_address: current_nft_ownership.owner_address.clone(),
-                //             is_soulbound: current_nft_ownership.is_soulbound_v2,
-                //         },
-                //     );
-                //     current_deleted_token_ownerships_v2.insert(
-                //         (
-                //             current_nft_ownership.token_data_id.clone(),
-                //             current_nft_ownership.property_version_v1.clone(),
-                //             current_nft_ownership.owner_address.clone(),
-                //             current_nft_ownership.storage_id.clone(),
-                //         ),
-                //         current_nft_ownership,
-                //     );
-                // }
-            },
-            _ => {},
-        }
-    }
-
-    // Getting list of values and sorting by pk in order to avoid postgres deadlock since we're doing multi threaded db writes
-    let mut current_collections_v2 = current_collections_v2
-        .into_values()
-        .collect::<Vec<CurrentCollectionV2>>();
-    let mut current_token_datas_v2 = current_token_datas_v2
-        .into_values()
-        .collect::<Vec<CurrentTokenDataV2>>();
-    let mut current_deleted_token_datas_v2 = current_deleted_token_datas_v2
-        .into_values()
-        .collect::<Vec<CurrentTokenDataV2>>();
-    let mut current_token_ownerships_v2 = current_token_ownerships_v2
-        .into_values()
-        .collect::<Vec<CurrentTokenOwnershipV2>>();
-    let mut current_token_v2_metadata = current_token_v2_metadata
-        .into_values()
-        .collect::<Vec<CurrentTokenV2Metadata>>();
-    let mut current_deleted_token_ownerships_v2 = current_deleted_token_ownerships_v2
-        .into_values()
-        .collect::<Vec<CurrentTokenOwnershipV2>>();
-    let mut current_token_royalties_v1 = current_token_royalties_v1
-        .into_values()
-        .collect::<Vec<CurrentTokenRoyaltyV1>>();
-    let mut all_current_token_claims = all_current_token_claims
-        .into_values()
-        .collect::<Vec<CurrentTokenPendingClaim>>();
-    // Sort by PK
-    current_collections_v2.sort_by(|a, b| a.collection_id.cmp(&b.collection_id));
-    current_deleted_token_datas_v2.sort_by(|a, b| a.token_data_id.cmp(&b.token_data_id));
-    current_token_datas_v2.sort_by(|a, b| a.token_data_id.cmp(&b.token_data_id));
-    current_token_ownerships_v2.sort();
-    current_token_v2_metadata.sort();
-    current_deleted_token_ownerships_v2.sort();
-    current_token_royalties_v1.sort();
-    all_current_token_claims.sort();
-
-    if !token_activities_v2.is_empty() && token_activities_v2.len() > 3 {
-        println!("\n\ncollections_v2: {:#?}", collections_v2);
-        println!("token_activities_v2: {:#?}", token_activities_v2);
-        println!("token_datas_v2: {:#?}", token_datas_v2);
-        println!("token_ownerships_v2: {:#?}", token_ownerships_v2);
-        println!("current_collections_v2: {:#?}", current_collections_v2);
-        println!("current_token_datas_v2: {:#?}", current_token_datas_v2);
-        println!(
-            "current_token_ownerships_v2: {:#?}",
-            current_token_ownerships_v2
-        );
-        println!(
-            "current_token_v2_metadata: {:#?}",
-            current_token_v2_metadata
-        );
-        println!(
-            "current_deleted_token_ownerships_v2: {:#?}",
-            current_deleted_token_ownerships_v2
-        );
-        println!(
-            "current_token_royalties_v1: {:#?}",
-            current_token_royalties_v1
-        );
-        println!("all_current_token_claims: {:#?}", all_current_token_claims);
-
-        panic!("STOP");
-    }
-
-    // (
-    //     collections_v2,
-    //     token_datas_v2,
-    //     token_ownerships_v2,
-    //     current_collections_v2,
-    //     current_token_datas_v2,
-    //     current_deleted_token_datas_v2,
-    //     current_token_ownerships_v2,
-    //     current_deleted_token_ownerships_v2,
-    //     token_activities_v2,
-    //     current_token_v2_metadata,
-    //     current_token_royalties_v1,
-    //     all_current_token_claims,
-    // )
+    return TransactionTokenChanges {
+        txn_version,
+        token_activities: token_activities_v2,
+    };
 }

@@ -59,7 +59,7 @@ struct TokenActivityHelperV2 {
     pub event_type: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub enum TokenAction {
     Mint,
     Burn,
