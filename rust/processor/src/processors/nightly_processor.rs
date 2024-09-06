@@ -61,7 +61,8 @@ use core::panic;
 use num::Zero;
 use odin::structs::{
     notifications::aptos_notifications::{
-        AptosIndexerNotification, CoinFrozen, CoinReceived, CoinSent, CoinSwap,
+        AptosIndexerNotification, CoinFrozen, CoinReceived, CoinSent, CoinSwap, NftBurned,
+        NftCancelClaim, NftClaim, NftMinted, NftOffer, NftReceived, NftSent,
     },
     ws::{
         aptos_ws::{
@@ -133,9 +134,8 @@ impl ProcessorTrait for NightlyProcessor {
         let parsed_transactions = parse_v2_token(&transactions, table_handle_to_owner);
         // println!("Parsed transactions: {:#?}", parsed_transactions);
 
-        let ws_updates = process_changes(start_version, end_version, parsed_transactions);
-
-        // println!("WS Updates: {:#?}", ws_updates);
+        let (ws_updates, notifications) =
+            process_changes(start_version, end_version, parsed_transactions);
 
         let processing_duration_in_secs = processing_start.elapsed().as_secs_f64();
 
@@ -1055,6 +1055,7 @@ fn process_transaction_tokens_changes(
 }
 
 // Helper struct to catch transfer between two users for v1 as direct transfer event data sucks
+#[derive(Debug, Serialize, Deserialize)]
 struct TokenEventData {
     from_address: Option<String>,
     to_address: Option<String>,
@@ -1062,12 +1063,17 @@ struct TokenEventData {
     event_index: i64,
 }
 
-fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChanges>) -> WsPayload {
+fn process_changes(
+    start_tx: u64,
+    end_tx: u64,
+    transactions: Vec<TransactionChanges>,
+) -> (WsPayload, Vec<(u64, Vec<AptosIndexerNotification>)>) {
     let mut ws_updates: Vec<(u64, Vec<AptosWsApiMsg>)> = vec![];
+    let mut notifications: Vec<(u64, Vec<AptosIndexerNotification>)> = vec![];
 
     for tx in transactions.iter() {
         let tx_version = tx.txn_version;
-        let gas_used = tx.gas_used;
+        let _gas_used = tx.gas_used;
         let coin_changes = &tx.coin_changes;
         let token_changes = &tx.token_changes;
 
@@ -1076,7 +1082,7 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
         let mut ws_account_token_updates: AHashMap<String, AptosAccountTokensUpdate> =
             AHashMap::new();
 
-        if tx_version != 1682379246 {
+        if tx_version != 1682620014 {
             // println!("txn_version: {:#?}", tx_version);
             // println!("coin_changes: {:#?}", coin_changes);
             // println!("token_changes: {:#?}", token_changes);
@@ -1257,6 +1263,9 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
 
         // Create a map to track unmatched deposits and withdrawals
         let mut pending_events: HashMap<String, TokenEventData> = HashMap::new();
+        // Create a map to track token claims and offers
+        let mut claim_offer_map: HashMap<String, AptosObjectUpdateStatus> = HashMap::new();
+
         // let mut user_changes: HashMap<String, AptosAccountTokensUpdate> = HashMap::new();
         for (token_activity, action) in token_changes.token_activities.iter() {
             let token_data_id = token_activity.token_data_id.clone();
@@ -1493,6 +1502,15 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
                         },
                     };
 
+                    // Add the offer to the claim_offer_map
+                    claim_offer_map.insert(
+                        token_data_id.clone(),
+                        AptosObjectUpdateStatus::Offer(Offer {
+                            sender_address: owner_address.clone(),
+                            receiver_address: receiver_address.clone(),
+                        }),
+                    );
+
                     let user_tokens_update_entry = ws_account_token_updates
                         .entry(owner_address.clone())
                         .or_insert_with(|| AptosAccountTokensUpdate {
@@ -1608,6 +1626,9 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
                         },
                     };
 
+                    // Add the claim to the claim_offer_map
+                    claim_offer_map.insert(token_data_id.clone(), AptosObjectUpdateStatus::Claim);
+
                     let receiver_tokens_update_entry = ws_account_token_updates
                         .entry(receiver_address.clone())
                         .or_insert_with(|| AptosAccountTokensUpdate {
@@ -1722,6 +1743,16 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
                         .entry(token_data_id.clone())
                         .or_insert_with(Vec::new);
 
+                    // Check if the token_id is in claim_offer_map and has an "Offer" status
+                    let is_offer_present =
+                        claim_offer_map.get(token_data_id).map_or(false, |status| {
+                            matches!(status, AptosObjectUpdateStatus::Offer(_))
+                        });
+
+                    if is_offer_present {
+                        continue;
+                    }
+
                     user_tokens_update_entry.push(AptosTokenChangeUpdate {
                         token_id: token_data_id.clone(),
                         event_id: event_data.event_index.to_string(),
@@ -1742,6 +1773,16 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
                         .entry(token_data_id.clone())
                         .or_insert_with(Vec::new);
 
+                    // Check if the token_id is in claim_offer_map and has an "Offer" status
+                    let is_claim_present =
+                        claim_offer_map.get(token_data_id).map_or(false, |status| {
+                            matches!(status, AptosObjectUpdateStatus::Claim)
+                        });
+
+                    if is_claim_present {
+                        continue;
+                    }
+
                     user_tokens_update_entry.push(AptosTokenChangeUpdate {
                         token_id: token_data_id.clone(),
                         event_id: event_data.event_index.to_string(),
@@ -1759,7 +1800,7 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
             }
         }
 
-        let mut notifications = Vec::new();
+        let mut transaction_notifications = Vec::new();
 
         // Before we send the updates, we will prepare notifications
         for (account_address, update) in ws_transaction_account_coin_updates.iter() {
@@ -1787,18 +1828,22 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
                             *entry -= deleted.amount;
                         },
                         AptosCoinObjectUpdateStatus::Frozen => {
-                            notifications.push(AptosIndexerNotification::CoinFrozen(CoinFrozen {
-                                aptos_address: account_address.clone(),
-                                coin_type: coin_type.clone(),
-                                frozen: true,
-                            }));
+                            transaction_notifications.push(AptosIndexerNotification::CoinFrozen(
+                                CoinFrozen {
+                                    aptos_address: account_address.clone(),
+                                    coin_type: coin_type.clone(),
+                                    frozen: true,
+                                },
+                            ));
                         },
                         AptosCoinObjectUpdateStatus::Unfrozen => {
-                            notifications.push(AptosIndexerNotification::CoinFrozen(CoinFrozen {
-                                aptos_address: account_address.clone(),
-                                coin_type: coin_type.clone(),
-                                frozen: false,
-                            }));
+                            transaction_notifications.push(AptosIndexerNotification::CoinFrozen(
+                                CoinFrozen {
+                                    aptos_address: account_address.clone(),
+                                    coin_type: coin_type.clone(),
+                                    frozen: false,
+                                },
+                            ));
                         },
                     }
                 }
@@ -1826,7 +1871,7 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
             if only_negative && !spent.is_empty() {
                 // If only negative changes, it's a CoinSent event
                 for (coin_type, amount) in spent {
-                    notifications.push(AptosIndexerNotification::CoinSent(CoinSent {
+                    transaction_notifications.push(AptosIndexerNotification::CoinSent(CoinSent {
                         sender_address: account_address.clone(),
                         coin_type,
                         amount,
@@ -1835,19 +1880,96 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
             } else if only_positive && !received.is_empty() {
                 // If only positive changes, it's a CoinReceived event
                 for (coin_type, amount) in received {
-                    notifications.push(AptosIndexerNotification::CoinReceived(CoinReceived {
-                        receiver_address: account_address.clone(),
-                        coin_type,
-                        amount,
-                    }));
+                    transaction_notifications.push(AptosIndexerNotification::CoinReceived(
+                        CoinReceived {
+                            receiver_address: account_address.clone(),
+                            coin_type,
+                            amount,
+                        },
+                    ));
                 }
             } else if !spent.is_empty() && !received.is_empty() {
                 // If there are both negative and positive changes, it's a CoinSwap event
-                notifications.push(AptosIndexerNotification::CoinSwap(CoinSwap {
+                transaction_notifications.push(AptosIndexerNotification::CoinSwap(CoinSwap {
                     aptos_address: account_address.clone(),
                     spent,
                     received,
                 }));
+            }
+        }
+
+        // println!("ws_account_token_updates {:#?}", ws_account_token_updates);
+
+        for (_account_address, token_update) in ws_account_token_updates.iter() {
+            for (_token_id, token_changes) in token_update.tokens_changes.iter() {
+                for token_change in token_changes.iter() {
+                    match &token_change.status {
+                        AptosObjectUpdateStatus::Created => {
+                            transaction_notifications.push(AptosIndexerNotification::NftMinted(
+                                NftMinted {
+                                    aptos_address: token_update.aptos_address.clone(),
+                                    nft_id: token_change.token_id.clone(),
+                                },
+                            ));
+                        },
+                        AptosObjectUpdateStatus::Offer(offer) => {
+                            transaction_notifications.push(AptosIndexerNotification::NftOffer(
+                                NftOffer {
+                                    sender: offer.sender_address.clone(),
+                                    receiver: offer.receiver_address.clone(),
+                                    nft_id: token_change.token_id.clone(),
+                                },
+                            ));
+                        },
+                        AptosObjectUpdateStatus::PendingClaim(_) => {
+                            // We only need offer, gonna split it at alexandria level
+                            // skip case for now
+                        },
+                        AptosObjectUpdateStatus::Claim => {
+                            transaction_notifications.push(AptosIndexerNotification::NftClaim(
+                                NftClaim {
+                                    receiver: token_update.aptos_address.clone(),
+                                    nft_id: token_change.token_id.clone(),
+                                },
+                            ));
+                        },
+                        AptosObjectUpdateStatus::CancelClaim => {
+                            transaction_notifications.push(
+                                AptosIndexerNotification::NftCancelClaim(NftCancelClaim {
+                                    aptos_address: token_update.aptos_address.clone(),
+                                    nft_id: token_change.token_id.clone(),
+                                }),
+                            );
+                        },
+                        AptosObjectUpdateStatus::Mutated => {
+                            // skip case for now
+                        },
+                        AptosObjectUpdateStatus::Deleted => {
+                            transaction_notifications.push(AptosIndexerNotification::NftBurned(
+                                NftBurned {
+                                    aptos_address: token_update.aptos_address.clone(),
+                                    nft_id: token_change.token_id.clone(),
+                                },
+                            ));
+                        },
+                        AptosObjectUpdateStatus::Sent(sent) => {
+                            transaction_notifications.push(AptosIndexerNotification::NftSent(
+                                NftSent {
+                                    sender_address: sent.sender_address.clone(),
+                                    nft_id: token_change.token_id.clone(),
+                                },
+                            ));
+                        },
+                        AptosObjectUpdateStatus::Received(received) => {
+                            transaction_notifications.push(AptosIndexerNotification::NftReceived(
+                                NftReceived {
+                                    receiver_address: received.receiver_address.clone(),
+                                    nft_id: token_change.token_id.clone(),
+                                },
+                            ));
+                        },
+                    }
+                }
             }
         }
 
@@ -1864,16 +1986,18 @@ fn process_changes(start_tx: u64, end_tx: u64, transactions: Vec<TransactionChan
                 .collect(),
         ));
 
-        // if tx_version == 1682379246 {
+        notifications.push((tx_version as u64, transaction_notifications));
+
+        // if tx_version == 1682620014 {
         //     println!("txn_version: {:#?}", tx_version);
         //     // println!("coin_changes: {:#?}", coin_changes);
         //     // println!("token_changes: {:#?}", token_changes);
-        //     println!("ws_account_token_updates: {:#?}", ws_updates);
+        //     // println!("ws_account_token_updates: {:#?}", ws_updates);
         //     println!("notifications: {:#?}", notifications);
 
         //     panic!("stop");
         // }
     }
 
-    (start_tx, end_tx, ws_updates)
+    ((start_tx, end_tx, ws_updates), notifications)
 }
