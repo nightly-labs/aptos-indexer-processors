@@ -100,7 +100,7 @@ tonic = { version = "0.11.0", features = [
     "codegen",
     "zstd",
 ] }
-tracing = "0.1.34"
+tracing = "0.1.38"
 unescape = "0.1.0"
 url = { version = "2.4.0", features = ["serde"] }
 warp = { version = "0.3.5", features = ["tls"] }
@@ -123,4 +123,4 @@ canonical_json = "0.5.0"
 allocative = "0.3.3"
 allocative_derive = "0.3.3"
 
-odin = { git = "ssh://git@github.com/nightly-labs/alexandria.git", rev = "e8754b584a8b3836f105406a6ac7b097c420d4fd", package = "odin" }
+odin = { git = "ssh://git@github.com/nightly-labs/alexandria.git", rev = "f79e6d94ea6c58c228cf236718977a477f4a161b", package = "odin" }

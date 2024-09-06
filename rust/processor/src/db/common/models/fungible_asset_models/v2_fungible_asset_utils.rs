@@ -363,11 +363,12 @@ pub enum FungibleAssetEvent {
     FrozenEventV2(FrozenEventV2),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum CoinAction {
     Deposit,
     Withdraw,
     Freeze,
+    UnFreeze,
     Gas,
 }
 
@@ -382,8 +383,15 @@ impl FungibleAssetEvent {
                 .map(|inner| Some((Self::DepositEvent(inner), CoinAction::Deposit))),
             "0x1::fungible_asset::WithdrawEvent" => serde_json::from_str(data)
                 .map(|inner| Some((Self::WithdrawEvent(inner), CoinAction::Withdraw))),
-            "0x1::fungible_asset::FrozenEvent" => serde_json::from_str(data)
-                .map(|inner| Some((Self::FrozenEvent(inner), CoinAction::Freeze))),
+            "0x1::fungible_asset::FrozenEvent" => {
+                serde_json::from_str(data).map(|inner: FrozenEvent| {
+                    let action = match inner.frozen {
+                        true => CoinAction::Freeze,
+                        false => CoinAction::UnFreeze,
+                    };
+                    Some((Self::FrozenEvent(inner), action))
+                })
+            },
             "0x1::fungible_asset::Deposit" => serde_json::from_str(data)
                 .map(|inner| Some((Self::DepositEventV2(inner), CoinAction::Deposit))),
             "0x1::fungible_asset::Withdraw" => serde_json::from_str(data)

@@ -69,6 +69,8 @@ tokio-postgres = { workspace = true }
 parquet = { workspace = true }
 parquet_derive = { workspace = true }
 
+odin = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 jemallocator = { workspace = true }
 

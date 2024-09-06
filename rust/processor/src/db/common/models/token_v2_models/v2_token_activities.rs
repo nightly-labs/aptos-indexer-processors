@@ -19,9 +19,9 @@ use bigdecimal::{BigDecimal, One, Zero};
 use field_count::FieldCount;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, FieldCount, Identifiable, Insertable, Serialize)]
-#[diesel(primary_key(transaction_version, event_index))]
-#[diesel(table_name = token_activities_v2)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+// #[diesel(primary_key(transaction_version, event_index))]
+// #[diesel(table_name = token_activities_v2)]
 pub struct TokenActivityV2 {
     pub transaction_version: i64,
     pub event_index: i64,
@@ -35,7 +35,7 @@ pub struct TokenActivityV2 {
     pub before_value: Option<String>,
     pub after_value: Option<String>,
     pub entry_function_id_str: Option<String>,
-    pub token_standard: String,
+    pub token_standard: TokenStandard,
     pub is_fungible_v2: Option<bool>,
     pub transaction_timestamp: chrono::NaiveDateTime,
 }
@@ -65,6 +65,12 @@ pub enum TokenAction {
     Burn,
     Transfer,
     Mutate,
+    // V1 exclusive
+    Offer,
+    CancelClaim,
+    Claim,
+    Deposit,
+    Withdraw,
 }
 
 impl TokenActivityV2 {
@@ -159,7 +165,7 @@ impl TokenActivityV2 {
                             after_value: None,
                             event_type: event_type.clone(),
                         },
-                        TokenAction::Mint,
+                        TokenAction::Transfer,
                     ),
                 };
                 return Ok(Some((
@@ -176,7 +182,7 @@ impl TokenActivityV2 {
                         before_value: token_activity_helper.before_value,
                         after_value: token_activity_helper.after_value,
                         entry_function_id_str: entry_function_id_str.clone(),
-                        token_standard: TokenStandard::V2.to_string(),
+                        token_standard: TokenStandard::V2,
                         is_fungible_v2: None,
                         transaction_timestamp: txn_timestamp,
                     },
@@ -207,7 +213,7 @@ impl TokenActivityV2 {
                         before_value: None,
                         after_value: None,
                         entry_function_id_str: entry_function_id_str.clone(),
-                        token_standard: TokenStandard::V2.to_string(),
+                        token_standard: TokenStandard::V2,
                         is_fungible_v2: None,
                         transaction_timestamp: txn_timestamp,
                     },
@@ -268,7 +274,7 @@ impl TokenActivityV2 {
                         to_address: None,
                         token_amount: inner.amount.clone(),
                     },
-                    TokenAction::Mint,
+                    TokenAction::Withdraw,
                 ),
                 TokenEvent::DepositTokenEvent(inner) => (
                     TokenActivityHelperV1 {
@@ -278,7 +284,7 @@ impl TokenActivityV2 {
                         to_address: Some(standardize_address(&event_account_address)),
                         token_amount: inner.amount.clone(),
                     },
-                    TokenAction::Mint,
+                    TokenAction::Deposit,
                 ),
                 TokenEvent::OfferTokenEvent(inner) => (
                     TokenActivityHelperV1 {
@@ -288,7 +294,7 @@ impl TokenActivityV2 {
                         to_address: Some(inner.get_to_address()),
                         token_amount: inner.amount.clone(),
                     },
-                    TokenAction::Mint,
+                    TokenAction::Offer,
                 ),
                 TokenEvent::CancelTokenOfferEvent(inner) => (
                     TokenActivityHelperV1 {
@@ -298,7 +304,7 @@ impl TokenActivityV2 {
                         to_address: Some(inner.get_to_address()),
                         token_amount: inner.amount.clone(),
                     },
-                    TokenAction::Mint,
+                    TokenAction::CancelClaim,
                 ),
                 TokenEvent::ClaimTokenEvent(inner) => (
                     TokenActivityHelperV1 {
@@ -308,7 +314,7 @@ impl TokenActivityV2 {
                         to_address: Some(inner.get_to_address()),
                         token_amount: inner.amount.clone(),
                     },
-                    TokenAction::Mint,
+                    TokenAction::Claim,
                 ),
             };
             let token_data_id_struct = token_activity_helper.token_data_id_struct;
@@ -326,7 +332,7 @@ impl TokenActivityV2 {
                     before_value: None,
                     after_value: None,
                     entry_function_id_str: entry_function_id_str.clone(),
-                    token_standard: TokenStandard::V1.to_string(),
+                    token_standard: TokenStandard::V1,
                     is_fungible_v2: None,
                     transaction_timestamp: txn_timestamp,
                 },

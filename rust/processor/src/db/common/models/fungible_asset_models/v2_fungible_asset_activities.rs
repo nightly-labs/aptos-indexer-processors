@@ -36,9 +36,9 @@ pub type CoinType = String;
 pub type CurrentCoinBalancePK = (OwnerAddress, CoinType);
 pub type EventToCoinType = AHashMap<EventGuidResource, CoinType>;
 
-#[derive(Clone, Debug, Deserialize, FieldCount, Identifiable, Insertable, Serialize)]
-#[diesel(primary_key(transaction_version, event_index))]
-#[diesel(table_name = fungible_asset_activities)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+// #[diesel(primary_key(transaction_version, event_index))]
+// #[diesel(table_name = fungible_asset_activities)]
 pub struct FungibleAssetActivity {
     pub transaction_version: i64,
     pub event_index: i64,
@@ -53,7 +53,7 @@ pub struct FungibleAssetActivity {
     pub is_transaction_success: bool,
     pub entry_function_id_str: Option<String>,
     pub block_height: i64,
-    pub token_standard: String,
+    pub token_standard: TokenStandard,
     pub transaction_timestamp: chrono::NaiveDateTime,
     pub storage_refund_amount: BigDecimal,
 }
@@ -130,7 +130,7 @@ impl FungibleAssetActivity {
                     is_transaction_success: true,
                     entry_function_id_str: entry_function_id_str.clone(),
                     block_height,
-                    token_standard: TokenStandard::V2.to_string(),
+                    token_standard: TokenStandard::V2,
                     transaction_timestamp: txn_timestamp,
                     storage_refund_amount: BigDecimal::zero(),
                 },
@@ -204,7 +204,7 @@ impl FungibleAssetActivity {
                     is_transaction_success: true,
                     entry_function_id_str: entry_function_id_str.clone(),
                     block_height,
-                    token_standard: TokenStandard::V1.to_string(),
+                    token_standard: TokenStandard::V1,
                     transaction_timestamp,
                     storage_refund_amount: BigDecimal::zero(),
                 },
@@ -253,7 +253,7 @@ impl FungibleAssetActivity {
             is_transaction_success: v1_activity.is_transaction_success,
             entry_function_id_str: v1_activity.entry_function_id_str,
             block_height,
-            token_standard: TokenStandard::V1.to_string(),
+            token_standard: TokenStandard::V1,
             transaction_timestamp,
             storage_refund_amount: v1_activity.storage_refund_amount,
         }

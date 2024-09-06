@@ -9,6 +9,7 @@ use crate::{
         parquet_gap_detector::ParquetFileGapDetectorInner, GapDetector, ProcessingResult,
     },
     grpc_stream::TransactionsPBResponse,
+    nats_queue::{nats_queue, NatsQueueSender},
     processors::{
         account_transactions_processor::AccountTransactionsProcessor,
         ans_processor::AnsProcessor,
@@ -56,6 +57,7 @@ use anyhow::{Context, Result};
 use aptos_moving_average::MovingAverage;
 use bitflags::bitflags;
 use kanal::AsyncSender;
+use odin::{ConnectOptions, Odin};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
@@ -131,6 +133,7 @@ pub struct Worker {
     pub transaction_filter: TransactionFilter,
     pub grpc_response_item_timeout_in_secs: u64,
     pub deprecated_tables: TableFlags,
+    // pub nats_queue_sender: Arc<Sender>,
 }
 
 impl Worker {
@@ -249,7 +252,8 @@ impl Worker {
             "[Parser] Building processor",
         );
 
-        let concurrent_tasks = self.number_concurrent_processing_tasks;
+        // let concurrent_tasks = self.number_concurrent_processing_tasks;
+        let concurrent_tasks = 1;
 
         // get the chain id
         let chain_id = crate::grpc_stream::get_chain_id(
@@ -325,12 +329,28 @@ impl Worker {
             (None, gap_detection_batch_size)
         };
 
+        // TODO update on launch
+        let odin = Odin::connect(
+            Some(vec![
+                "nats://localhost:4228".to_string(),
+                "nats://localhost:4229".to_string(),
+            ]),
+            Some(ConnectOptions::with_user_and_password(
+                "alexandria".to_string(),
+                "alexandria".to_string(),
+            )),
+        )
+        .await;
+        let odin_connection: Arc<Odin> = Arc::new(odin);
+        let queue_sender = Arc::new(nats_queue(odin_connection.clone()));
+
         let processor = build_processor(
             &self.processor_config,
             self.per_table_chunk_sizes.clone(),
             self.deprecated_tables,
             self.db_pool.clone(),
             maybe_gap_detector_sender,
+            Some(queue_sender.clone()),
         );
 
         let gap_detector = if is_parquet_processor {
@@ -368,13 +388,16 @@ impl Worker {
         );
 
         let mut processor_tasks = vec![fetcher_task];
+        println!("concurrent_tasks: {}", concurrent_tasks);
         for task_index in 0..concurrent_tasks {
+            let queue_sender = queue_sender.clone();
             let join_handle: JoinHandle<()> = self
                 .launch_processor_task(
                     task_index,
                     receiver.clone(),
                     gap_detector_sender.clone(),
                     gap_detector.clone(),
+                    queue_sender,
                 )
                 .await;
             processor_tasks.push(join_handle);
@@ -400,6 +423,7 @@ impl Worker {
         receiver: kanal::AsyncReceiver<TransactionsPBResponse>,
         gap_detector_sender: AsyncSender<ProcessingResult>,
         mut gap_detector: GapDetector,
+        queue_sender: Arc<NatsQueueSender>,
     ) -> JoinHandle<()> {
         let processor_name = self.processor_config.name();
         let stream_address = self.indexer_grpc_data_service_address.to_string();
@@ -414,6 +438,7 @@ impl Worker {
                 self.deprecated_tables,
                 self.db_pool.clone(),
                 Some(gap_detector_sender.clone()),
+                Some(queue_sender),
             )
         } else {
             build_processor(
@@ -422,6 +447,7 @@ impl Worker {
                 self.deprecated_tables,
                 self.db_pool.clone(),
                 None,
+                Some(queue_sender),
             )
         };
 
@@ -898,6 +924,7 @@ pub fn build_processor(
     deprecated_tables: TableFlags,
     db_pool: ArcDbPool,
     gap_detector_sender: Option<AsyncSender<ProcessingResult>>, // Parquet only
+    nats_queue_sender: Option<Arc<NatsQueueSender>>,
 ) -> Processor {
     match config {
         ProcessorConfig::AccountTransactionsProcessor => Processor::from(
@@ -949,9 +976,11 @@ pub fn build_processor(
         ProcessorConfig::UserTransactionProcessor => Processor::from(
             UserTransactionProcessor::new(db_pool, per_table_chunk_sizes, deprecated_tables),
         ),
-        ProcessorConfig::NightlyProcessor(config) => {
-            Processor::from(NightlyProcessor::new(db_pool, config.clone()))
-        },
+        ProcessorConfig::NightlyProcessor(config) => Processor::from(NightlyProcessor::new(
+            db_pool,
+            config.clone(),
+            nats_queue_sender.expect("Nightly processor requires a nats queue sender"),
+        )),
         ProcessorConfig::ParquetDefaultProcessor(config) => {
             Processor::from(ParquetDefaultProcessor::new(
                 db_pool,
