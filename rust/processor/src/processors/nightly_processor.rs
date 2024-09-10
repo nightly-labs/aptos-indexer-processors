@@ -21,7 +21,7 @@ use crate::{
             },
         },
     },
-    nats_queue::{NatsQueueSender, WsPayload},
+    nats_queue::NatsQueueSender,
 };
 use crate::{
     db::common::models::{
@@ -75,9 +75,7 @@ use odin::structs::{
 };
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, collections::HashMap, fmt::Debug, sync::Arc};
-
-const V1_GAS_COIN_TYPE: &str = "0x1::aptos_coin::AptosCoin";
-const V2_GAS_COIN_TYPE: &str = "0x000000000000000000000000000000000000000000000000000000000000000a";
+use tracing::warn;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -132,10 +130,20 @@ impl ProcessorTrait for NightlyProcessor {
             TableMetadataForToken::get_table_handle_to_owner_from_transactions(&transactions);
 
         let parsed_transactions = parse_v2_token(&transactions, table_handle_to_owner);
-        // println!("Parsed transactions: {:#?}", parsed_transactions);
 
-        let (ws_updates, notifications) =
-            process_changes(start_version, end_version, parsed_transactions);
+        let (ws_updates, notifications) = process_changes(parsed_transactions);
+
+        self.queue_sender
+            .ws_sender
+            .send((start_version, end_version, ws_updates))
+            .await
+            .unwrap();
+
+        self.queue_sender
+            .notifications_sender
+            .send((start_version, end_version, notifications))
+            .await
+            .unwrap();
 
         let processing_duration_in_secs = processing_start.elapsed().as_secs_f64();
 
@@ -147,7 +155,6 @@ impl ProcessorTrait for NightlyProcessor {
             processing_duration_in_secs
         );
 
-        // panic!("stop");
         // Process the transactions and send them to the nats queue
 
         Ok(ProcessingResult::DefaultProcessingResult(
@@ -243,64 +250,6 @@ fn parse_v2_token(
             &table_handle,
         );
 
-        let any_mint =
-            transaction_coin_changes
-                .asset_activities
-                .iter()
-                .any(|(activity, action)| {
-                    action == &CoinAction::Freeze && activity.token_standard == TokenStandard::V1
-                });
-
-        if any_mint {
-            println!("txn_version: {:#?}", txn_version);
-            println!("transaction_coin_changes: {:#?}", transaction_coin_changes);
-            println!(
-                "transaction_token_changes: {:#?}",
-                transaction_token_changes
-            );
-
-            panic!("stop");
-        }
-
-        // let any_mint =
-        //     transaction_token_changes
-        //         .token_activities
-        //         .iter()
-        //         .any(|(activity, action)| {
-        //             action == &TokenAction::F && activity.token_standard == TokenStandard::V1
-        //         });
-
-        // let any_mint2 =
-        //     transaction_token_changes
-        //         .token_activities
-        //         .iter()
-        //         .any(|(activity, action)| {
-        //             action == &TokenAction::Withdraw && activity.token_standard == TokenStandard::V1
-        //         });
-
-        // if any_mint && !any_mint2 {
-        //     println!("txn_version: {:#?}", txn_version);
-        //     println!("transaction_coin_changes: {:#?}", transaction_coin_changes);
-        //     println!(
-        //         "transaction_token_changes: {:#?}",
-        //         transaction_token_changes
-        //     );
-
-        //     panic!("stop");
-        // }
-
-        // if txn_version == 1676396954 {
-        //     println!("txn_version: {:#?}", txn_version);
-        //     // println!("tx_info {:#?}", transaction_info);
-        //     println!("transaction_coin_changes: {:#?}", transaction_coin_changes);
-        //     println!(
-        //         "transaction_token_changes: {:#?}",
-        //         transaction_token_changes
-        //     );
-
-        //     panic!("stop");
-        // }
-
         transaction_changes.push(TransactionChanges {
             txn_version,
             gas_used: transaction_info.gas_used as i128,
@@ -315,6 +264,7 @@ fn parse_v2_token(
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionCoinChanges {
     pub txn_version: i64,
+    pub gas_event: Option<FungibleAssetActivity>,
     pub asset_balances: AHashMap<String, AHashMap<String, FungibleAssetBalance>>, // owner_address -> asset_type -> balance
     pub asset_activities: Vec<(FungibleAssetActivity, CoinAction)>,
 }
@@ -432,8 +382,14 @@ fn process_transaction_coins_changes(
         }
     }
 
+    let mut final_gas_event: Option<FungibleAssetActivity> = None;
+    let mut final_gas_amount = txn_gas_used;
+
     // The artificial gas event, only need for v1
     if let Some(req) = user_request {
+        // Update has used gas
+        final_gas_amount = final_gas_amount * req.gas_unit_price;
+
         let fee_statement = events.iter().find_map(|event| {
             let event_type = event.type_str.as_str();
             FeeStatement::from_event(event_type, &event.data, txn_version)
@@ -448,7 +404,7 @@ fn process_transaction_coins_changes(
             fee_statement,
         );
 
-        fungible_asset_activities.push((gas_event, CoinAction::Gas));
+        final_gas_event = Some(gas_event)
     }
 
     // Loop to handle events and collect additional metadata from events for v2
@@ -489,10 +445,13 @@ fn process_transaction_coins_changes(
                     "[Parser] error parsing fungible asset activity v2");
             panic!("[Parser] error parsing fungible asset activity v2");
         }) {
-            if action == CoinAction::Withdraw && v2_activity.amount == Some(txn_gas_used.clone()) {
-                continue;
+            if action == CoinAction::Withdraw
+                && v2_activity.amount == Some(final_gas_amount.clone())
+            {
+                final_gas_event = Some(v2_activity.clone());
+            } else {
+                fungible_asset_activities.push((v2_activity, action));
             }
-            fungible_asset_activities.push((v2_activity, action));
         }
     }
 
@@ -529,6 +488,7 @@ fn process_transaction_coins_changes(
 
     TransactionCoinChanges {
         txn_version,
+        gas_event: final_gas_event,
         asset_balances: fungible_asset_balances,
         asset_activities: fungible_asset_activities,
     }
@@ -701,51 +661,7 @@ fn process_transaction_tokens_changes(
         let wsc_index = index as i64;
         match wsc.change.as_ref().unwrap() {
             Change::WriteTableItem(table_item) => {
-                // if let Some((collection, current_collection)) =
-                //     CollectionV2::get_v1_from_write_table_item(
-                //         table_item,
-                //         txn_version,
-                //         wsc_index,
-                //         txn_timestamp,
-                //         table_handle_to_owner,
-                //         conn,
-                //         query_retries,
-                //         query_retry_delay_ms,
-                //     )
-                //     .await
-                //     .unwrap()
-                // {
-                //     collections_v2.push(collection);
-                //     current_collections_v2
-                //         .insert(current_collection.collection_id.clone(), current_collection);
-                // }
-                // if let Some((token_data, current_token_data)) =
-                //     TokenDataV2::get_v1_from_write_table_item(
-                //         table_item,
-                //         txn_version,
-                //         wsc_index,
-                //         txn_timestamp,
-                //     )
-                //     .unwrap()
-                // {
-                //     token_datas_v2.push(token_data);
-                //     current_token_datas_v2
-                //         .insert(current_token_data.token_data_id.clone(), current_token_data);
-                // }
-                // if let Some(current_token_royalty) =
-                //     CurrentTokenRoyaltyV1::get_v1_from_write_table_item(
-                //         table_item,
-                //         txn_version,
-                //         txn_timestamp,
-                //     )
-                //     .unwrap()
-                // {
-                //     current_token_royalties_v1.insert(
-                //         current_token_royalty.token_data_id.clone(),
-                //         current_token_royalty,
-                //     );
-                // }
-                if let Some((token_ownership, current_token_ownership)) =
+                if let Some((_token_ownership, current_token_ownership)) =
                     TokenOwnershipV2::get_v1_from_write_table_item(
                         table_item,
                         txn_version,
@@ -755,7 +671,6 @@ fn process_transaction_tokens_changes(
                     )
                     .unwrap()
                 {
-                    // token_ownerships_v2.push(token_ownership);
                     if let Some(cto) = current_token_ownership {
                         prior_nft_ownership.insert(
                             cto.token_data_id.clone(),
@@ -797,7 +712,7 @@ fn process_transaction_tokens_changes(
                 }
             },
             Change::DeleteTableItem(table_item) => {
-                if let Some((token_ownership, current_token_ownership)) =
+                if let Some((_token_ownership, current_token_ownership)) =
                     TokenOwnershipV2::get_v1_from_delete_table_item(
                         table_item,
                         txn_version,
@@ -807,7 +722,6 @@ fn process_transaction_tokens_changes(
                     )
                     .unwrap()
                 {
-                    // token_ownerships_v2.push(token_ownership);
                     if let Some(cto) = current_token_ownership {
                         prior_nft_ownership.insert(
                             cto.token_data_id.clone(),
@@ -849,21 +763,7 @@ fn process_transaction_tokens_changes(
                 }
             },
             Change::WriteResource(resource) => {
-                // if let Some((collection, current_collection)) =
-                //     CollectionV2::get_v2_from_write_resource(
-                //         resource,
-                //         txn_version,
-                //         wsc_index,
-                //         txn_timestamp,
-                //         &token_v2_metadata_helper,
-                //     )
-                //     .unwrap()
-                // {
-                //     collections_v2.push(collection);
-                //     current_collections_v2
-                //         .insert(current_collection.collection_id.clone(), current_collection);
-                // }
-                if let Some((token_data, current_token_data)) =
+                if let Some((token_data, _current_token_data)) =
                     TokenDataV2::get_v2_from_write_resource(
                         resource,
                         txn_version,
@@ -874,7 +774,7 @@ fn process_transaction_tokens_changes(
                     .unwrap()
                 {
                     // Add NFT ownership
-                    let (mut ownerships, current_ownerships) =
+                    let (ownerships, current_ownerships) =
                         TokenOwnershipV2::get_nft_v2_from_token_data(
                             &token_data,
                             &token_v2_metadata_helper,
@@ -897,156 +797,13 @@ fn process_transaction_tokens_changes(
                             },
                         );
                     }
-                    // token_ownerships_v2.append(&mut ownerships);
+
                     current_token_ownerships_v2.extend(current_ownerships);
-                    // token_datas_v2.push(token_data);
-                    // current_token_datas_v2
-                    //     .insert(current_token_data.token_data_id.clone(), current_token_data);
                 }
-
-                // // Add burned NFT handling for token datas (can probably be merged with below)
-                // if let Some(deleted_token_data) =
-                //     TokenDataV2::get_burned_nft_v2_from_write_resource(
-                //         resource,
-                //         txn_version,
-                //         txn_timestamp,
-                //         &tokens_burned,
-                //     )
-                //     .unwrap()
-                // {
-                //     current_deleted_token_datas_v2
-                //         .insert(deleted_token_data.token_data_id.clone(), deleted_token_data);
-                // }
-                // Add burned NFT handling
-                // if let Some((nft_ownership, current_nft_ownership)) =
-                //     TokenOwnershipV2::get_burned_nft_v2_from_write_resource(
-                //         resource,
-                //         txn_version,
-                //         wsc_index,
-                //         txn_timestamp,
-                //         &prior_nft_ownership,
-                //         &tokens_burned,
-                //         &token_v2_metadata_helper,
-                //         conn,
-                //         query_retries,
-                //         query_retry_delay_ms,
-                //     )
-                //     .await
-                //     .unwrap()
-                // {
-                //     // token_ownerships_v2.push(nft_ownership);
-                //     prior_nft_ownership.insert(
-                //         current_nft_ownership.token_data_id.clone(),
-                //         NFTOwnershipV2 {
-                //             token_data_id: current_nft_ownership.token_data_id.clone(),
-                //             owner_address: current_nft_ownership.owner_address.clone(),
-                //             is_soulbound: current_nft_ownership.is_soulbound_v2,
-                //         },
-                //     );
-                //     current_deleted_token_ownerships_v2.insert(
-                //         (
-                //             current_nft_ownership.token_data_id.clone(),
-                //             current_nft_ownership.property_version_v1.clone(),
-                //             current_nft_ownership.owner_address.clone(),
-                //             current_nft_ownership.storage_id.clone(),
-                //         ),
-                //         current_nft_ownership,
-                //     );
-                // }
-
-                // // Track token properties
-                // if let Some(token_metadata) = CurrentTokenV2Metadata::from_write_resource(
-                //     resource,
-                //     txn_version,
-                //     &token_v2_metadata_helper,
-                // )
-                // .unwrap()
-                // {
-                //     current_token_v2_metadata.insert(
-                //         (
-                //             token_metadata.object_address.clone(),
-                //             token_metadata.resource_type.clone(),
-                //         ),
-                //         token_metadata,
-                //     );
-                // }
-            },
-            Change::DeleteResource(resource) => {
-                // // Add burned NFT handling for token datas (can probably be merged with below)
-                // if let Some(deleted_token_data) =
-                //     TokenDataV2::get_burned_nft_v2_from_delete_resource(
-                //         resource,
-                //         txn_version,
-                //         txn_timestamp,
-                //         &tokens_burned,
-                //     )
-                //     .unwrap()
-                // {
-                //     current_deleted_token_datas_v2
-                //         .insert(deleted_token_data.token_data_id.clone(), deleted_token_data);
-                // }
-                // if let Some((nft_ownership, current_nft_ownership)) =
-                //     TokenOwnershipV2::get_burned_nft_v2_from_delete_resource(
-                //         resource,
-                //         txn_version,
-                //         wsc_index,
-                //         txn_timestamp,
-                //         &prior_nft_ownership,
-                //         &tokens_burned,
-                //         conn,
-                //         query_retries,
-                //         query_retry_delay_ms,
-                //     )
-                //     .await
-                //     .unwrap()
-                // {
-                //     token_ownerships_v2.push(nft_ownership);
-                //     prior_nft_ownership.insert(
-                //         current_nft_ownership.token_data_id.clone(),
-                //         NFTOwnershipV2 {
-                //             token_data_id: current_nft_ownership.token_data_id.clone(),
-                //             owner_address: current_nft_ownership.owner_address.clone(),
-                //             is_soulbound: current_nft_ownership.is_soulbound_v2,
-                //         },
-                //     );
-                //     current_deleted_token_ownerships_v2.insert(
-                //         (
-                //             current_nft_ownership.token_data_id.clone(),
-                //             current_nft_ownership.property_version_v1.clone(),
-                //             current_nft_ownership.owner_address.clone(),
-                //             current_nft_ownership.storage_id.clone(),
-                //         ),
-                //         current_nft_ownership,
-                //     );
-                // }
             },
             _ => {},
         }
     }
-
-    // let any_mint = token_activities_v2.iter().any(|(activity, action)| {
-    //     action == &TokenAction::Withdraw && activity.token_standard == TokenStandard::V1
-    //     // && token_activities_v2.len() == 1
-    // });
-
-    // if any_mint {
-    //     println!("txn_version: {:#?}", txn_version);
-    //     println!("Prior NFT Ownership: {:#?}", prior_nft_ownership);
-    //     println!(
-    //         "Current Token Ownerships V2: {:#?}",
-    //         current_token_ownerships_v2
-    //     );
-    //     println!("Current burned token datas: {:#?}", tokens_burned);
-    //     println!("Current minted token datas: {:#?}", tokens_minted);
-    //     println!(
-    //         "Current Deleted Token Ownerships V2: {:#?}",
-    //         current_deleted_token_ownerships_v2
-    //     );
-    //     // println!("transaction_coin_changes: {:#?}", token_activities_v2);
-    //     println!("transaction_token_changes: {:#?}", token_activities_v2);
-
-    //     panic!("stop");
-    // }
 
     return TransactionTokenChanges {
         txn_version,
@@ -1064,16 +821,16 @@ struct TokenEventData {
 }
 
 fn process_changes(
-    start_tx: u64,
-    end_tx: u64,
     transactions: Vec<TransactionChanges>,
-) -> (WsPayload, Vec<(u64, Vec<AptosIndexerNotification>)>) {
+) -> (
+    Vec<(u64, Vec<AptosWsApiMsg>)>,
+    Vec<(u64, Vec<AptosIndexerNotification>)>,
+) {
     let mut ws_updates: Vec<(u64, Vec<AptosWsApiMsg>)> = vec![];
     let mut notifications: Vec<(u64, Vec<AptosIndexerNotification>)> = vec![];
 
     for tx in transactions.iter() {
         let tx_version = tx.txn_version;
-        let _gas_used = tx.gas_used;
         let coin_changes = &tx.coin_changes;
         let token_changes = &tx.token_changes;
 
@@ -1082,25 +839,85 @@ fn process_changes(
         let mut ws_account_token_updates: AHashMap<String, AptosAccountTokensUpdate> =
             AHashMap::new();
 
-        if tx_version != 1682620014 {
-            // println!("txn_version: {:#?}", tx_version);
-            // println!("coin_changes: {:#?}", coin_changes);
-            // println!("token_changes: {:#?}", token_changes);
+        // Process Gas event
+        let (gas_type, gas_amount) = if let Some(gas_event) = coin_changes.gas_event.clone() {
+            let coin_type = match gas_event.asset_type.clone() {
+                Some(asset_type) => asset_type,
+                None => {
+                    tracing::warn!(
+                        transaction_version = tx_version,
+                        "Missing coin type or owner address"
+                    );
+                    PROCESSOR_UNKNOWN_TYPE_COUNT
+                        .with_label_values(&["NightlyProcessor"])
+                        .inc();
+                    continue;
+                },
+            };
 
-            // panic!("stop");
+            let owner_address = match gas_event.gas_fee_payer_address.clone() {
+                Some(fee_payer) => fee_payer,
+                None => match gas_event.owner_address {
+                    Some(owner_address) => owner_address,
+                    None => {
+                        tracing::warn!(
+                            transaction_version = tx_version,
+                            "Missing coin type or owner address"
+                        );
+                        PROCESSOR_UNKNOWN_TYPE_COUNT
+                            .with_label_values(&["NightlyProcessor"])
+                            .inc();
+                        continue;
+                    },
+                },
+            };
+            let gas_amount = match gas_event.amount.clone().and_then(|amount| amount.to_i128()) {
+                Some(amount) => amount,
+                None => {
+                    warn!(
+                        "Invalid or missing gas amount for transaction {txn_version}",
+                        txn_version = tx_version
+                    );
+                    PROCESSOR_UNKNOWN_TYPE_COUNT
+                        .with_label_values(&["NightlyProcessor"])
+                        .inc();
+                    continue;
+                },
+            };
+
+            ws_transaction_account_coin_updates
+                .entry(owner_address.clone())
+                .or_insert_with(|| AptosCoinBalanceUpdate {
+                    aptos_address: owner_address,
+                    changed_balances: HashMap::new(),
+                    sequence_number: tx_version as u64,
+                    timestamp_ms: chrono::Utc::now().naive_utc().and_utc().timestamp_millis()
+                        as u64,
+                })
+                .changed_balances
+                .entry(coin_type.to_string())
+                .or_insert(vec![])
+                .push(CoinUpdate {
+                    coin_type: coin_type.to_string(),
+                    current_total_balance: gas_amount,
+                    standard: AptosCoinStandard::Coin,
+                    status: AptosCoinObjectUpdateStatus::Mutated(CoinMutated {
+                        change: -gas_amount,
+                    }),
+                });
+
+            (coin_type, gas_amount)
+        } else {
+            if !coin_changes.asset_balances.is_empty() && !coin_changes.asset_activities.is_empty()
+            {
+                warn!(
+                    "Missing gas event for transaction {txn_version}",
+                    txn_version = tx_version
+                );
+            }
+
             continue;
-        }
-
-        // if tx_version == 1682379246 {
-        //     println!("txn_version: {:#?}", tx_version);
-        //     println!("coin_changes: {:#?}", coin_changes);
-        //     println!("token_changes: {:#?}", token_changes);
-
-        //     panic!("stop");
-        //     // continue;
-        // }
-
-        // println!("coin_changes: {:#?}", coin_changes);
+        };
 
         for (asset_activity, action) in coin_changes.asset_activities.iter() {
             let (coin_type, owner_address) = match (
@@ -1130,11 +947,12 @@ fn process_changes(
                 None => {
                     tracing::warn!(
                         transaction_version = tx_version,
-                        "Coin balance doesn't exist"
+                        "Coin balance doesn't exist for the owner {owner_address} and coin type {coin_type}"
                     );
                     PROCESSOR_UNKNOWN_TYPE_COUNT
                         .with_label_values(&["NightlyProcessor"])
                         .inc();
+
                     continue;
                 },
             };
@@ -1231,17 +1049,10 @@ fn process_changes(
                 }
             };
 
-            // println!("txn_version: {:#?}", tx_version);
-            // println!("coin_type: {:#?}", coin_type);
-            // println!("owner_address: {:#?}", owner_address);
-            // println!("activity_amount: {:#?}", activity_amount);
-            // println!("coin_balance_amount: {:#?}", coin_balance_amount);
-            // println!("object_status: {:#?}", object_status);
-
             ws_transaction_account_coin_updates
                 .entry(owner_address.clone())
                 .or_insert_with(|| AptosCoinBalanceUpdate {
-                    aptos_address: owner_address,
+                    aptos_address: owner_address.clone(),
                     changed_balances: HashMap::new(),
                     sequence_number: tx_version as u64,
                     timestamp_ms: chrono::Utc::now().naive_utc().and_utc().timestamp_millis()
@@ -1251,7 +1062,7 @@ fn process_changes(
                 .entry(coin_type.clone())
                 .or_insert(vec![])
                 .push(CoinUpdate {
-                    coin_type,
+                    coin_type: coin_type.clone(),
                     current_total_balance: coin_balance_amount,
                     standard: match asset_activity.token_standard {
                         TokenStandard::V1 => AptosCoinStandard::Coin,
@@ -1808,11 +1619,6 @@ fn process_changes(
 
             // Aggregate changes by coin_type
             for (coin_type, balance_updates) in update.changed_balances.iter() {
-                if coin_type == V1_GAS_COIN_TYPE || coin_type == V2_GAS_COIN_TYPE {
-                    // Skip gas coins
-                    continue;
-                }
-
                 for coin_update in balance_updates {
                     let entry = aggregated_changes.entry(coin_type.clone()).or_insert(0);
 
@@ -1846,6 +1652,11 @@ fn process_changes(
                             ));
                         },
                     }
+                }
+
+                if coin_type == &gas_type {
+                    let entry = aggregated_changes.entry(coin_type.clone()).or_insert(0);
+                    *entry += gas_amount;
                 }
             }
 
@@ -1897,8 +1708,6 @@ fn process_changes(
                 }));
             }
         }
-
-        // println!("ws_account_token_updates {:#?}", ws_account_token_updates);
 
         for (_account_address, token_update) in ws_account_token_updates.iter() {
             for (_token_id, token_changes) in token_update.tokens_changes.iter() {
@@ -1987,17 +1796,7 @@ fn process_changes(
         ));
 
         notifications.push((tx_version as u64, transaction_notifications));
-
-        // if tx_version == 1682620014 {
-        //     println!("txn_version: {:#?}", tx_version);
-        //     // println!("coin_changes: {:#?}", coin_changes);
-        //     // println!("token_changes: {:#?}", token_changes);
-        //     // println!("ws_account_token_updates: {:#?}", ws_updates);
-        //     println!("notifications: {:#?}", notifications);
-
-        //     panic!("stop");
-        // }
     }
 
-    ((start_tx, end_tx, ws_updates), notifications)
+    (ws_updates, notifications)
 }

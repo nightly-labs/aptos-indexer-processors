@@ -341,8 +341,12 @@ impl Worker {
             )),
         )
         .await;
+
         let odin_connection: Arc<Odin> = Arc::new(odin);
-        let queue_sender = Arc::new(nats_queue(odin_connection.clone()));
+        let mut queue = nats_queue(odin_connection.clone());
+        queue.run().await;
+
+        let queue_sender = Arc::new(queue);
 
         let processor = build_processor(
             &self.processor_config,
