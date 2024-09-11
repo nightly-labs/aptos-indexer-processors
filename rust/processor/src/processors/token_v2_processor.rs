@@ -192,15 +192,15 @@ async fn insert_to_db(
             per_table_chunk_sizes,
         ),
     );
-    let ta_v2 = execute_in_chunks(
-        conn.clone(),
-        insert_token_activities_v2_query,
-        token_activities_v2,
-        get_config_table_chunk_size::<TokenActivityV2>(
-            "token_activities_v2",
-            per_table_chunk_sizes,
-        ),
-    );
+    // let ta_v2 = execute_in_chunks(
+    //     conn.clone(),
+    //     insert_token_activities_v2_query,
+    //     token_activities_v2,
+    //     get_config_table_chunk_size::<TokenActivityV2>(
+    //         "token_activities_v2",
+    //         per_table_chunk_sizes,
+    //     ),
+    // );
     let ct_v2 = execute_in_chunks(
         conn.clone(),
         insert_current_token_v2_metadatas_query,
@@ -229,40 +229,40 @@ async fn insert_to_db(
         ),
     );
 
-    let (
-        coll_v2_res,
-        td_v2_res,
-        to_v2_res,
-        cc_v2_res,
-        ctd_v2_res,
-        cdtd_v2_res,
-        cto_v2_res,
-        cdto_v2_res,
-        ta_v2_res,
-        ct_v2_res,
-        ctr_v1_res,
-        ctc_v1_res,
-    ) = tokio::join!(
-        coll_v2, td_v2, to_v2, cc_v2, ctd_v2, cdtd_v2, cto_v2, cdto_v2, ta_v2, ct_v2, ctr_v1,
-        ctc_v1
-    );
+    // let (
+    //     coll_v2_res,
+    //     td_v2_res,
+    //     to_v2_res,
+    //     cc_v2_res,
+    //     ctd_v2_res,
+    //     cdtd_v2_res,
+    //     cto_v2_res,
+    //     cdto_v2_res,
+    //     ta_v2_res,
+    //     ct_v2_res,
+    //     ctr_v1_res,
+    //     ctc_v1_res,
+    // ) = tokio::join!(
+    //     coll_v2, td_v2, to_v2, cc_v2, ctd_v2, cdtd_v2, cto_v2, cdto_v2, ta_v2, ct_v2, ctr_v1,
+    //     ctc_v1
+    // );
 
-    for res in [
-        coll_v2_res,
-        td_v2_res,
-        to_v2_res,
-        cc_v2_res,
-        ctd_v2_res,
-        cdtd_v2_res,
-        cto_v2_res,
-        cdto_v2_res,
-        ta_v2_res,
-        ct_v2_res,
-        ctr_v1_res,
-        ctc_v1_res,
-    ] {
-        res?;
-    }
+    // for res in [
+    //     coll_v2_res,
+    //     td_v2_res,
+    //     to_v2_res,
+    //     cc_v2_res,
+    //     ctd_v2_res,
+    //     cdtd_v2_res,
+    //     cto_v2_res,
+    //     cdto_v2_res,
+    //     ta_v2_res,
+    //     ct_v2_res,
+    //     ctr_v1_res,
+    //     ctc_v1_res,
+    // ] {
+    //     res?;
+    // }
 
     Ok(())
 }
@@ -477,26 +477,26 @@ fn insert_current_deleted_token_ownerships_v2_query(
     )
 }
 
-fn insert_token_activities_v2_query(
-    items_to_insert: Vec<TokenActivityV2>,
-) -> (
-    impl QueryFragment<Pg> + diesel::query_builder::QueryId + Send,
-    Option<&'static str>,
-) {
-    use schema::token_activities_v2::dsl::*;
+// fn insert_token_activities_v2_query(
+//     items_to_insert: Vec<TokenActivityV2>,
+// ) -> (
+//     impl QueryFragment<Pg> + diesel::query_builder::QueryId + Send,
+//     Option<&'static str>,
+// ) {
+//     use schema::token_activities_v2::dsl::*;
 
-    (
-        diesel::insert_into(schema::token_activities_v2::table)
-            .values(items_to_insert)
-            .on_conflict((transaction_version, event_index))
-            .do_update()
-            .set((
-                is_fungible_v2.eq(excluded(is_fungible_v2)),
-                inserted_at.eq(excluded(inserted_at)),
-            )),
-        None,
-    )
-}
+//     (
+//         diesel::insert_into(schema::token_activities_v2::table)
+//             .values(items_to_insert)
+//             .on_conflict((transaction_version, event_index))
+//             .do_update()
+//             .set((
+//                 is_fungible_v2.eq(excluded(is_fungible_v2)),
+//                 inserted_at.eq(excluded(inserted_at)),
+//             )),
+//         None,
+//     )
+// }
 
 fn insert_current_token_v2_metadatas_query(
     items_to_insert: Vec<CurrentTokenV2Metadata>,
@@ -891,7 +891,7 @@ async fn parse_v2_token(
                     }
                 }
                 // handling all the token v1 events
-                if let Some(event) = TokenActivityV2::get_v1_from_parsed_event(
+                if let Some((event, _)) = TokenActivityV2::get_v1_from_parsed_event(
                     event,
                     txn_version,
                     txn_timestamp,
@@ -903,7 +903,7 @@ async fn parse_v2_token(
                     token_activities_v2.push(event);
                 }
                 // handling all the token v2 events
-                if let Some(event) = TokenActivityV2::get_nft_v2_from_parsed_event(
+                if let Some((event, _)) = TokenActivityV2::get_nft_v2_from_parsed_event(
                     event,
                     txn_version,
                     txn_timestamp,
@@ -911,7 +911,6 @@ async fn parse_v2_token(
                     &entry_function_id_str,
                     &token_v2_metadata_helper,
                 )
-                .await
                 .unwrap()
                 {
                     token_activities_v2.push(event);
@@ -1141,7 +1140,6 @@ async fn parse_v2_token(
                                 txn_timestamp,
                                 &tokens_burned,
                             )
-                            .await
                             .unwrap()
                         {
                             current_deleted_token_datas_v2.insert(
@@ -1212,7 +1210,6 @@ async fn parse_v2_token(
                                 txn_timestamp,
                                 &tokens_burned,
                             )
-                            .await
                             .unwrap()
                         {
                             current_deleted_token_datas_v2.insert(

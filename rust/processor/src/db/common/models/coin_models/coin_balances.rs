@@ -92,3 +92,32 @@ impl CoinBalance {
         }
     }
 }
+
+// Custom
+pub fn get_all_event_to_coin_type(
+    write_resource: &WriteResource,
+    txn_version: i64,
+) -> anyhow::Result<Option<EventToCoinType>> {
+    match &CoinResource::from_write_resource(write_resource, txn_version)? {
+        Some(CoinResource::CoinStoreResource(inner)) => {
+            let coin_info_type = &CoinInfoType::from_move_type(
+                &write_resource.r#type.as_ref().unwrap().generic_type_params[0],
+                write_resource.type_str.as_ref(),
+                txn_version,
+            );
+            let coin_type = coin_info_type.get_coin_type_trunc();
+            let event_to_coin_mapping: EventToCoinType = AHashMap::from([
+                (
+                    inner.withdraw_events.guid.id.get_standardized(),
+                    coin_type.clone(),
+                ),
+                (
+                    inner.deposit_events.guid.id.get_standardized(),
+                    coin_type.clone(),
+                ),
+            ]);
+            Ok(Some(event_to_coin_mapping))
+        },
+        _ => Ok(None),
+    }
+}

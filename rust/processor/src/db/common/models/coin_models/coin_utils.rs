@@ -5,7 +5,10 @@
 #![allow(clippy::extra_unused_lifetimes)]
 
 use crate::{
-    db::common::models::default_models::move_resources::MoveResource,
+    db::common::models::{
+        default_models::move_resources::MoveResource,
+        fungible_asset_models::v2_fungible_asset_utils::CoinAction,
+    },
     utils::util::{deserialize_from_string, hash_str, standardize_address, truncate_str},
 };
 use anyhow::{bail, Context, Result};
@@ -316,14 +319,16 @@ pub enum CoinEvent {
 }
 
 impl CoinEvent {
-    pub fn from_event(data_type: &str, data: &str, txn_version: i64) -> Result<Option<CoinEvent>> {
+    pub fn from_event(
+        data_type: &str,
+        data: &str,
+        txn_version: i64,
+    ) -> Result<Option<(CoinEvent, CoinAction)>> {
         match data_type {
-            "0x1::coin::WithdrawEvent" => {
-                serde_json::from_str(data).map(|inner| Some(CoinEvent::WithdrawCoinEvent(inner)))
-            },
-            "0x1::coin::DepositEvent" => {
-                serde_json::from_str(data).map(|inner| Some(CoinEvent::DepositCoinEvent(inner)))
-            },
+            "0x1::coin::WithdrawEvent" => serde_json::from_str(data)
+                .map(|inner| Some((CoinEvent::WithdrawCoinEvent(inner), CoinAction::Withdraw))),
+            "0x1::coin::DepositEvent" => serde_json::from_str(data)
+                .map(|inner| Some((CoinEvent::DepositCoinEvent(inner), CoinAction::Deposit))),
             _ => Ok(None),
         }
         .context(format!(

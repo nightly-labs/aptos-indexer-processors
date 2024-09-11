@@ -5,7 +5,7 @@
 #![allow(clippy::extra_unused_lifetimes)]
 #![allow(clippy::unused_unit)]
 
-use super::v2_fungible_asset_utils::{FeeStatement, FungibleAssetEvent};
+use super::v2_fungible_asset_utils::{CoinAction, FeeStatement, FungibleAssetEvent};
 use crate::{
     db::common::models::{
         coin_models::{
@@ -36,9 +36,9 @@ pub type CoinType = String;
 pub type CurrentCoinBalancePK = (OwnerAddress, CoinType);
 pub type EventToCoinType = AHashMap<EventGuidResource, CoinType>;
 
-#[derive(Clone, Debug, Deserialize, FieldCount, Identifiable, Insertable, Serialize)]
-#[diesel(primary_key(transaction_version, event_index))]
-#[diesel(table_name = fungible_asset_activities)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+// #[diesel(primary_key(transaction_version, event_index))]
+// #[diesel(table_name = fungible_asset_activities)]
 pub struct FungibleAssetActivity {
     pub transaction_version: i64,
     pub event_index: i64,
@@ -53,13 +53,13 @@ pub struct FungibleAssetActivity {
     pub is_transaction_success: bool,
     pub entry_function_id_str: Option<String>,
     pub block_height: i64,
-    pub token_standard: String,
+    pub token_standard: TokenStandard,
     pub transaction_timestamp: chrono::NaiveDateTime,
     pub storage_refund_amount: BigDecimal,
 }
 
 impl FungibleAssetActivity {
-    pub async fn get_v2_from_event(
+    pub fn get_v2_from_event(
         event: &Event,
         txn_version: i64,
         block_height: i64,
@@ -67,9 +67,9 @@ impl FungibleAssetActivity {
         event_index: i64,
         entry_function_id_str: &Option<String>,
         object_aggregated_data_mapping: &ObjectAggregatedDataMapping,
-    ) -> anyhow::Result<Option<Self>> {
+    ) -> anyhow::Result<Option<(Self, CoinAction)>> {
         let event_type = event.type_str.clone();
-        if let Some(fa_event) =
+        if let Some((fa_event, action)) =
             &FungibleAssetEvent::from_event(event_type.as_str(), &event.data, txn_version)?
         {
             let (storage_id, is_frozen, amount) = match fa_event {
@@ -115,24 +115,27 @@ impl FungibleAssetActivity {
                 .and_then(|metadata| metadata.fungible_asset_store.as_ref())
                 .map(|fa| fa.metadata.get_reference_address());
 
-            return Ok(Some(Self {
-                transaction_version: txn_version,
-                event_index,
-                owner_address: maybe_owner_address,
-                storage_id: storage_id.clone(),
-                asset_type: maybe_asset_type,
-                is_frozen,
-                amount,
-                type_: event_type.clone(),
-                is_gas_fee: false,
-                gas_fee_payer_address: None,
-                is_transaction_success: true,
-                entry_function_id_str: entry_function_id_str.clone(),
-                block_height,
-                token_standard: TokenStandard::V2.to_string(),
-                transaction_timestamp: txn_timestamp,
-                storage_refund_amount: BigDecimal::zero(),
-            }));
+            return Ok(Some((
+                Self {
+                    transaction_version: txn_version,
+                    event_index,
+                    owner_address: maybe_owner_address,
+                    storage_id: storage_id.clone(),
+                    asset_type: maybe_asset_type,
+                    is_frozen,
+                    amount,
+                    type_: event_type.clone(),
+                    is_gas_fee: false,
+                    gas_fee_payer_address: None,
+                    is_transaction_success: true,
+                    entry_function_id_str: entry_function_id_str.clone(),
+                    block_height,
+                    token_standard: TokenStandard::V2,
+                    transaction_timestamp: txn_timestamp,
+                    storage_refund_amount: BigDecimal::zero(),
+                },
+                action.clone(),
+            )));
         }
         Ok(None)
     }
@@ -145,8 +148,8 @@ impl FungibleAssetActivity {
         entry_function_id_str: &Option<String>,
         event_to_coin_type: &EventToCoinType,
         event_index: i64,
-    ) -> anyhow::Result<Option<Self>> {
-        if let Some(inner) =
+    ) -> anyhow::Result<Option<(Self, CoinAction)>> {
+        if let Some((inner, action)) =
             CoinEvent::from_event(event.type_str.as_str(), &event.data, txn_version)?
         {
             let (owner_address, amount, coin_type_option) = match inner {
@@ -186,24 +189,27 @@ impl FungibleAssetActivity {
             let storage_id =
                 CoinInfoType::get_storage_id(coin_type.as_str(), owner_address.as_str());
 
-            Ok(Some(Self {
-                transaction_version: txn_version,
-                event_index,
-                owner_address: Some(owner_address),
-                storage_id,
-                asset_type: Some(coin_type),
-                is_frozen: None,
-                amount: Some(amount),
-                type_: event.type_str.clone(),
-                is_gas_fee: false,
-                gas_fee_payer_address: None,
-                is_transaction_success: true,
-                entry_function_id_str: entry_function_id_str.clone(),
-                block_height,
-                token_standard: TokenStandard::V1.to_string(),
-                transaction_timestamp,
-                storage_refund_amount: BigDecimal::zero(),
-            }))
+            Ok(Some((
+                Self {
+                    transaction_version: txn_version,
+                    event_index,
+                    owner_address: Some(owner_address),
+                    storage_id,
+                    asset_type: Some(coin_type),
+                    is_frozen: None,
+                    amount: Some(amount),
+                    type_: event.type_str.clone(),
+                    is_gas_fee: false,
+                    gas_fee_payer_address: None,
+                    is_transaction_success: true,
+                    entry_function_id_str: entry_function_id_str.clone(),
+                    block_height,
+                    token_standard: TokenStandard::V1,
+                    transaction_timestamp,
+                    storage_refund_amount: BigDecimal::zero(),
+                },
+                action,
+            )))
         } else {
             Ok(None)
         }
@@ -247,7 +253,7 @@ impl FungibleAssetActivity {
             is_transaction_success: v1_activity.is_transaction_success,
             entry_function_id_str: v1_activity.entry_function_id_str,
             block_height,
-            token_standard: TokenStandard::V1.to_string(),
+            token_standard: TokenStandard::V1,
             transaction_timestamp,
             storage_refund_amount: v1_activity.storage_refund_amount,
         }

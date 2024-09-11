@@ -11,6 +11,7 @@ pub mod events_processor;
 pub mod fungible_asset_processor;
 pub mod monitoring_processor;
 pub mod nft_metadata_processor;
+pub mod nightly_processor;
 pub mod objects_processor;
 pub mod parquet_processors;
 pub mod stake_processor;
@@ -26,6 +27,7 @@ use self::{
     fungible_asset_processor::FungibleAssetProcessor,
     monitoring_processor::MonitoringProcessor,
     nft_metadata_processor::{NftMetadataProcessor, NftMetadataProcessorConfig},
+    nightly_processor::NightlyProcessor,
     objects_processor::{ObjectsProcessor, ObjectsProcessorConfig},
     stake_processor::{StakeProcessor, StakeProcessorConfig},
     token_v2_processor::{TokenV2Processor, TokenV2ProcessorConfig},
@@ -58,6 +60,7 @@ use aptos_protos::transaction::v1::Transaction as ProtoTransaction;
 use async_trait::async_trait;
 use diesel::{pg::upsert::excluded, ExpressionMethods};
 use enum_dispatch::enum_dispatch;
+use nightly_processor::NightlyProcessorConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -198,6 +201,7 @@ pub enum ProcessorConfig {
     TokenV2Processor(TokenV2ProcessorConfig),
     TransactionMetadataProcessor,
     UserTransactionProcessor,
+    NightlyProcessor(NightlyProcessorConfig),
     ParquetDefaultProcessor(ParquetDefaultProcessorConfig),
     ParquetFungibleAssetProcessor(ParquetFungibleAssetProcessorConfig),
     ParquetTransactionMetadataProcessor(ParquetTransactionMetadataProcessorConfig),
@@ -256,6 +260,7 @@ pub enum Processor {
     TokenV2Processor,
     TransactionMetadataProcessor,
     UserTransactionProcessor,
+    NightlyProcessor,
     // Parquet processors
     ParquetDefaultProcessor,
     ParquetFungibleAssetProcessor,

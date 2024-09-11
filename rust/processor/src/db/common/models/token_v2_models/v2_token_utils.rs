@@ -39,7 +39,7 @@ pub type TokenV2Burned = AHashMap<CurrentObjectPK, Burn>;
 pub type TokenV2Minted = AHashSet<CurrentObjectPK>;
 
 /// Tracks which token standard a token / collection is built upon
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum TokenStandard {
     V1,
     V2,

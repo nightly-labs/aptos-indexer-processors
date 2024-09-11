@@ -23,6 +23,7 @@ mod config;
 mod db;
 pub mod gap_detectors;
 pub mod grpc_stream;
+pub mod nats_queue;
 pub mod processors;
 #[path = "db/postgres/schema.rs"]
 pub mod schema;

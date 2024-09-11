@@ -97,15 +97,15 @@ async fn insert_to_db(
         "Inserting to db",
     );
 
-    let faa = execute_in_chunks(
-        conn.clone(),
-        insert_fungible_asset_activities_query,
-        fungible_asset_activities,
-        get_config_table_chunk_size::<FungibleAssetActivity>(
-            "fungible_asset_activities",
-            per_table_chunk_sizes,
-        ),
-    );
+    // let faa = execute_in_chunks(
+    //     conn.clone(),
+    //     insert_fungible_asset_activities_query,
+    //     fungible_asset_activities,
+    //     get_config_table_chunk_size::<FungibleAssetActivity>(
+    //         "fungible_asset_activities",
+    //         per_table_chunk_sizes,
+    //     ),
+    // );
     let fam = execute_in_chunks(
         conn.clone(),
         insert_fungible_asset_metadata_query,
@@ -157,33 +157,33 @@ async fn insert_to_db(
         coin_supply,
         get_config_table_chunk_size::<CoinSupply>("coin_supply", per_table_chunk_sizes),
     );
-    let (faa_res, fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res) =
-        tokio::join!(faa, fam, fab, cfab, cufab_v1, cufab_v2, cs);
-    for res in [
-        faa_res, fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res,
-    ] {
-        res?;
-    }
+    // let (faa_res, fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res) =
+    //     tokio::join!(faa, fam, fab, cfab, cufab_v1, cufab_v2, cs);
+    // for res in [
+    //     faa_res, fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res,
+    // ] {
+    //     res?;
+    // }
 
     Ok(())
 }
 
-fn insert_fungible_asset_activities_query(
-    items_to_insert: Vec<FungibleAssetActivity>,
-) -> (
-    impl QueryFragment<Pg> + diesel::query_builder::QueryId + Send,
-    Option<&'static str>,
-) {
-    use schema::fungible_asset_activities::dsl::*;
+// fn insert_fungible_asset_activities_query(
+//     items_to_insert: Vec<FungibleAssetActivity>,
+// ) -> (
+//     impl QueryFragment<Pg> + diesel::query_builder::QueryId + Send,
+//     Option<&'static str>,
+// ) {
+//     use schema::fungible_asset_activities::dsl::*;
 
-    (
-        diesel::insert_into(schema::fungible_asset_activities::table)
-            .values(items_to_insert)
-            .on_conflict((transaction_version, event_index))
-            .do_nothing(),
-        None,
-    )
-}
+//     (
+//         diesel::insert_into(schema::fungible_asset_activities::table)
+//             .values(items_to_insert)
+//             .on_conflict((transaction_version, event_index))
+//             .do_nothing(),
+//         None,
+//     )
+// }
 
 fn insert_fungible_asset_metadata_query(
     items_to_insert: Vec<FungibleAssetMetadataModel>,
@@ -623,7 +623,7 @@ async fn parse_v2_coin(
 
         // Loop to handle events and collect additional metadata from events for v2
         for (index, event) in events.iter().enumerate() {
-            if let Some(v1_activity) = FungibleAssetActivity::get_v1_from_event(
+            if let Some((v1_activity, _action)) = FungibleAssetActivity::get_v1_from_event(
                 event,
                 txn_version,
                 block_height,
@@ -642,7 +642,7 @@ async fn parse_v2_coin(
             }) {
                 fungible_asset_activities.push(v1_activity);
             }
-            if let Some(v2_activity) = FungibleAssetActivity::get_v2_from_event(
+            if let Some((v2_activity, _action)) = FungibleAssetActivity::get_v2_from_event(
                 event,
                 txn_version,
                 block_height,
@@ -651,7 +651,6 @@ async fn parse_v2_coin(
                 &entry_function_id_str,
                 &fungible_asset_object_helper,
             )
-            .await
             .unwrap_or_else(|e| {
                 tracing::error!(
                     transaction_version = txn_version,
@@ -711,7 +710,6 @@ async fn parse_v2_coin(
                             txn_timestamp,
                             &fungible_asset_object_helper,
                         )
-                        .await
                         .unwrap_or_else(|e| {
                             tracing::error!(
                             transaction_version = txn_version,
