@@ -22,8 +22,8 @@ use odin::structs::{
     ws::{
         aptos_ws::{
             AptosAccountTokensUpdate, AptosCoinBalanceUpdate, AptosCoinObjectUpdateStatus,
-            AptosCoinStandard, AptosObjectUpdateStatus, AptosTokenChangeUpdate, AptosTokenStandard,
-            AptosWsApiMsg, CoinUpdate, Offer, PendingClaim,
+            AptosCoinStandard, AptosCoinUpdate, AptosObjectUpdateStatus, AptosTokenChangeUpdate,
+            AptosTokenStandard, AptosWsApiMsg, Offer, PendingClaim,
         },
         ws_message::{CoinCreated, CoinDeleted, CoinMutated, Received, Sent},
     },
@@ -202,7 +202,7 @@ fn process_gas_event(
         .changed_balances
         .entry(coin_type.clone())
         .or_insert(vec![])
-        .push(CoinUpdate {
+        .push(AptosCoinUpdate {
             coin_type: coin_type.clone(),
             current_total_balance: gas_amount,
             standard: AptosCoinStandard::Coin,
@@ -324,7 +324,7 @@ fn process_single_coin_activity(
         .changed_balances
         .entry(coin_type.to_string())
         .or_insert(vec![])
-        .push(CoinUpdate {
+        .push(AptosCoinUpdate {
             coin_type: coin_type.to_string(),
             current_total_balance: coin_balance_amount,
             standard: match asset_activity.token_standard {
@@ -826,46 +826,46 @@ fn generate_notifications(
                     AptosObjectUpdateStatus::Created => {
                         notifications.push(AptosIndexerNotification::NftMinted(NftMinted {
                             aptos_address: account_address.clone(),
-                            nft_id: token_id.clone(),
+                            token_data_id: token_id.clone(),
                         }));
                     },
                     AptosObjectUpdateStatus::Offer(offer) => {
                         notifications.push(AptosIndexerNotification::NftOffer(NftOffer {
                             sender: offer.sender_address.clone(),
                             receiver: offer.receiver_address.clone(),
-                            nft_id: token_id.clone(),
+                            token_data_id: token_id.clone(),
                         }));
                     },
                     AptosObjectUpdateStatus::Claim => {
                         notifications.push(AptosIndexerNotification::NftClaim(NftClaim {
                             receiver: account_address.clone(),
-                            nft_id: token_id.clone(),
+                            token_data_id: token_id.clone(),
                         }));
                     },
                     AptosObjectUpdateStatus::CancelClaim => {
                         notifications.push(AptosIndexerNotification::NftCancelClaim(
                             NftCancelClaim {
                                 aptos_address: account_address.clone(),
-                                nft_id: token_id.clone(),
+                                token_data_id: token_id.clone(),
                             },
                         ));
                     },
                     AptosObjectUpdateStatus::Deleted => {
                         notifications.push(AptosIndexerNotification::NftBurned(NftBurned {
                             aptos_address: account_address.clone(),
-                            nft_id: token_id.clone(),
+                            token_data_id: token_id.clone(),
                         }));
                     },
                     AptosObjectUpdateStatus::Sent(sent) => {
                         notifications.push(AptosIndexerNotification::NftSent(NftSent {
                             sender_address: sent.sender_address.clone(),
-                            nft_id: token_id.clone(),
+                            token_data_id: token_id.clone(),
                         }));
                     },
                     AptosObjectUpdateStatus::Received(received) => {
                         notifications.push(AptosIndexerNotification::NftReceived(NftReceived {
                             receiver_address: received.receiver_address.clone(),
-                            nft_id: token_id.clone(),
+                            token_data_id: token_id.clone(),
                         }));
                     },
                     _ => {}, // Skip other status types

@@ -42,31 +42,17 @@ use crate::{
 };
 use ahash::{AHashMap, AHashSet};
 use aptos_protos::transaction::v1::{
-    transaction::TxnData, write_set_change::Change, Event, Transaction, TransactionInfo,
-    UserTransactionRequest,
+    move_type::Content, transaction::TxnData, write_set_change::Change, Event, Transaction,
+    TransactionInfo, UserTransactionRequest,
 };
 use async_trait::async_trait;
-use bigdecimal::{BigDecimal, ToPrimitive, Zero};
+use bigdecimal::BigDecimal;
 use chrono::NaiveDateTime;
 use core::panic;
-use odin::structs::{
-    notifications::aptos_notifications::{
-        AptosIndexerNotification, CoinFrozen, CoinReceived, CoinSent, CoinSwap, NftBurned,
-        NftCancelClaim, NftClaim, NftMinted, NftOffer, NftReceived, NftSent,
-    },
-    ws::{
-        aptos_ws::{
-            AptosAccountTokensUpdate, AptosCoinBalanceUpdate, AptosCoinObjectUpdateStatus,
-            AptosCoinStandard, AptosObjectUpdateStatus, AptosTokenChangeUpdate, AptosTokenStandard,
-            AptosWsApiMsg, CoinUpdate, Offer, PendingClaim,
-        },
-        ws_message::{CoinCreated, CoinDeleted, CoinMutated, Received, Sent},
-    },
-};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, fs::OpenOptions, sync::Arc};
+use std::{fs::OpenOptions, sync::Arc};
 use tracing::warn;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -170,8 +156,8 @@ pub struct TransactionChanges {
     pub gas_used: i128,
     pub coin_changes: TransactionCoinChanges,
     pub token_changes: TransactionTokenChanges,
+    pub nudge_events: Vec<Nudge>,
 }
-use std::io::Write;
 
 fn parse_v2_token(
     transactions: &[Transaction],
@@ -240,44 +226,14 @@ fn parse_v2_token(
                 &table_handle,
             );
 
-            // 1.2042955419
-            // 2. 2043132209
-            // 3. nudge from seeds 1 to seeds 2
-            if txn_version == 2054770372 {
-                // Convert transaction to pretty JSON string
-
-                fn write_to_file<T: serde::Serialize>(data: &T, filename: &str) {
-                    let json_string = to_string_pretty(&data)
-                        .expect(&format!("Failed to serialize {} to JSON", filename));
-
-                    let mut file = OpenOptions::new()
-                        .create(true)
-                        .write(true) // Using write instead of append to overwrite
-                        .truncate(true)
-                        .open(format!("dump_{}.json", filename))
-                        .expect(&format!("Failed to open {}", filename));
-
-                    file.write_all(json_string.as_bytes())
-                        .expect(&format!("Failed to write {}", filename));
-                }
-
-                // Save each piece of data to its own file
-                // write_to_file(&txn_data, "txn_data");
-                write_to_file(&transaction_info, "transaction_info");
-                write_to_file(&txn_timestamp, "txn_timestamp");
-                write_to_file(&events, "events");
-                write_to_file(&user_request, "user_request");
-                write_to_file(&transaction_token_changes, "transaction_token_changes");
-
-                println!("All transaction data has been dumped to separate files");
-                panic!("Transaction dumped to files");
-            }
+            let nudge_events = look_for_nudge_events(events);
 
             Some(TransactionChanges {
                 txn_version,
                 gas_used: transaction_info.gas_used as i128,
                 coin_changes: transaction_coin_changes,
                 token_changes: transaction_token_changes,
+                nudge_events,
             })
         })
         .collect()
@@ -818,18 +774,64 @@ fn process_transaction_tokens_changes(
     };
 }
 
-// pub struct NudgeAction {
-//     pub txn_version: i64,
-//     pub nudge_sender: String,
-//     pub nudge_receiver: String,
-// }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NudgeData {
+    pub initial_recipient: String,
+    pub initial_sender: String,
+    pub initial_sender_is_next_nudger: bool,
+    pub times_nudged: String,
+}
 
-// fn look_for_nudge_events(events: &Vec<Event>) -> Vec<Event> {
-//     let mut nudge_events = vec![];
-//     for event in events {
-//         if event.type_str == "nudge" {
-//             nudge_events.push(event.clone());
-//         }
-//     }
-//     nudge_events
-// }
+const NUDGE_ADDRESS: &str = "0xd0995d57c9d4839dcecfdbb34a2650172a69fcfe0444f3229fec90eddf945141";
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Nudge {
+    pub nudge_sender: String,
+    pub nudge_receiver: String,
+}
+
+impl From<NudgeData> for Nudge {
+    #[inline]
+    fn from(data: NudgeData) -> Self {
+        Self {
+            nudge_sender: data.initial_sender,
+            nudge_receiver: data.initial_recipient,
+        }
+    }
+}
+
+fn look_for_nudge_events(events: &Vec<Event>) -> Vec<Nudge> {
+    // Use Arc to share the events across threads without cloning
+    let events = Arc::new(events);
+
+    // Convert to parallel iterator and process
+    // There should be only one nudge event per transaction but we'll handle multiple just in case
+    events
+        .par_iter()
+        .filter_map(|event| {
+            // Early return if any of the required fields are None
+            let move_type = event.r#type.as_ref()?;
+            let content = move_type.content.as_ref()?;
+
+            if let Content::Struct(struct_tag) = content {
+                if struct_tag.module != "nudge"
+                    || struct_tag.name != "NudgeEvent"
+                    || struct_tag.address != NUDGE_ADDRESS
+                {
+                    return None;
+                }
+
+                // Parse event data
+                return match serde_json::from_str::<NudgeData>(&event.data) {
+                    Ok(data) => Some(Nudge::from(data)),
+                    Err(err) => {
+                        warn!("Failed to parse nudge event: {:?}, err: {:?}", event, err);
+                        None
+                    },
+                };
+            }
+
+            None // Return None for non-Struct variants
+        })
+        .collect()
+}

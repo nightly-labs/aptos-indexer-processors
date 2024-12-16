@@ -148,7 +148,7 @@ allocative_derive = "0.3.3"
 mockall = "0.12.1"
 downcast-rs = "1.2.1"
 
-odin = { git = "ssh://git@github.com/nightly-labs/alexandria.git", rev = "f79e6d94ea6c58c228cf236718977a477f4a161b", package = "odin" }
+odin = { git = "ssh://git@github.com/nightly-labs/alexandria.git", rev = "a6f54d9714adcc60520c96e2c07799000560c9d3", package = "odin" }
 
 
 # [profile.release]
