@@ -1,0 +1,105 @@
+{
+  "hash": "YEOM7rXH730StPlw7zc2gbgnAjvjiYeLWa+sqqv/f2M=",
+  "stateChangeHash": "4gYkiEh+aIzJRqryujW7Ov9iEFZRCaEDfO+DNcJ4aQM=",
+  "eventRootHash": "teZef2rPLsZi6tXCjcV1r1nDCkxd8ju9UuZmqNL3UJk=",
+  "gasUsed": "12",
+  "success": true,
+  "vmStatus": "Executed successfully",
+  "accumulatorRootHash": "ddFuIdw69b5dst7kBc5LqU/hTND9W7xSYmhnrVv+Ljo=",
+  "changes": [
+    {
+      "type": "TYPE_WRITE_RESOURCE",
+      "writeResource": {
+        "address": "0xd0995d57c9d4839dcecfdbb34a2650172a69fcfe0444f3229fec90eddf945141",
+        "stateKeyHash": "fU8+5OTIb0MOl72OavMdw2WrLtA6w4WHV/aJg21mpYA=",
+        "type": {
+          "address": "0xd0995d57c9d4839dcecfdbb34a2650172a69fcfe0444f3229fec90eddf945141",
+          "module": "nudge",
+          "name": "GlobalNudgeInfo"
+        },
+        "typeStr": "0xd0995d57c9d4839dcecfdbb34a2650172a69fcfe0444f3229fec90eddf945141::nudge::GlobalNudgeInfo",
+        "data": "{\"nudge_count\":{\"max_value\":\"340282366920938463463374607431768211455\",\"value\":\"2387394\"},\"signer_cap\":{\"account\":\"0xff862905f6657000bb88eb979a06d56c4794d1d6f66baf00896ffd3c165637dc\"}}"
+      }
+    },
+    {
+      "type": "TYPE_WRITE_RESOURCE",
+      "writeResource": {
+        "address": "0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911",
+        "stateKeyHash": "BwTd8SxYNwUBc1/bMUaEovnr68BnMvEbPngv6z1NgGs=",
+        "type": {
+          "address": "0x1",
+          "module": "coin",
+          "name": "CoinStore",
+          "genericTypeParams": [
+            {
+              "type": "MOVE_TYPES_STRUCT",
+              "struct": {
+                "address": "0x1",
+                "module": "aptos_coin",
+                "name": "AptosCoin"
+              }
+            }
+          ]
+        },
+        "typeStr": "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>",
+        "data": "{\"coin\":{\"value\":\"1399287837\"},\"deposit_events\":{\"counter\":\"22\",\"guid\":{\"id\":{\"addr\":\"0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911\",\"creation_num\":\"2\"}}},\"frozen\":false,\"withdraw_events\":{\"counter\":\"25\",\"guid\":{\"id\":{\"addr\":\"0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911\",\"creation_num\":\"3\"}}}}"
+      }
+    },
+    {
+      "type": "TYPE_WRITE_RESOURCE",
+      "writeResource": {
+        "address": "0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911",
+        "stateKeyHash": "ufNPF/NRs+ZUYmXNP2/aEoPHXFh3l2qPvJzFn9DxXpU=",
+        "type": {
+          "address": "0x1",
+          "module": "account",
+          "name": "Account"
+        },
+        "typeStr": "0x1::account::Account",
+        "data": "{\"authentication_key\":\"0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911\",\"coin_register_events\":{\"counter\":\"18\",\"guid\":{\"id\":{\"addr\":\"0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911\",\"creation_num\":\"0\"}}},\"guid_creation_num\":\"45\",\"key_rotation_events\":{\"counter\":\"0\",\"guid\":{\"id\":{\"addr\":\"0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911\",\"creation_num\":\"1\"}}},\"rotation_capability_offer\":{\"for\":{\"vec\":[]}},\"sequence_number\":\"78\",\"signer_capability_offer\":{\"for\":{\"vec\":[]}}}"
+      }
+    },
+    {
+      "type": "TYPE_WRITE_RESOURCE",
+      "writeResource": {
+        "address": "0xe6e4923f38023ea987166c59c5592169ffbf12e94835d75c85fe2713c0becb5e",
+        "stateKeyHash": "SItaKDO2vJnwYD5fFLY7Eqkg8yeMLynh/So8igDRszM=",
+        "type": {
+          "address": "0x1",
+          "module": "object",
+          "name": "ObjectCore"
+        },
+        "typeStr": "0x1::object::ObjectCore",
+        "data": "{\"allow_ungated_transfer\":true,\"guid_creation_num\":\"1125899906842625\",\"owner\":\"0xff862905f6657000bb88eb979a06d56c4794d1d6f66baf00896ffd3c165637dc\",\"transfer_events\":{\"counter\":\"0\",\"guid\":{\"id\":{\"addr\":\"0xe6e4923f38023ea987166c59c5592169ffbf12e94835d75c85fe2713c0becb5e\",\"creation_num\":\"1125899906842624\"}}}}"
+      }
+    },
+    {
+      "type": "TYPE_WRITE_RESOURCE",
+      "writeResource": {
+        "address": "0xe6e4923f38023ea987166c59c5592169ffbf12e94835d75c85fe2713c0becb5e",
+        "stateKeyHash": "SItaKDO2vJnwYD5fFLY7Eqkg8yeMLynh/So8igDRszM=",
+        "type": {
+          "address": "0xd0995d57c9d4839dcecfdbb34a2650172a69fcfe0444f3229fec90eddf945141",
+          "module": "nudge",
+          "name": "NudgePairInfo"
+        },
+        "typeStr": "0xd0995d57c9d4839dcecfdbb34a2650172a69fcfe0444f3229fec90eddf945141::nudge::NudgePairInfo",
+        "data": "{\"extend_ref\":{\"self\":\"0xe6e4923f38023ea987166c59c5592169ffbf12e94835d75c85fe2713c0becb5e\"},\"initial_recipient\":\"0xacf601d976f426394bc2e05cb943187cac5fee70ce00e2c861ed78528edeec\",\"initial_sender\":\"0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911\",\"times_nudged\":\"11\"}"
+      }
+    },
+    {
+      "type": "TYPE_WRITE_TABLE_ITEM",
+      "writeTableItem": {
+        "stateKeyHash": "bkso1A+YoQamUWNTCSTA3LQME0nTqpFdEItNbPwd2xk=",
+        "handle": "0x1b854694ae746cdbd8d44186ca4929b2b337df21d1c74633be19b2710552fdca",
+        "key": "0x0619dc29a0aac8fa146714058e8dd6d2d0f3bdf5f6331907bf91f3acd81e6935",
+        "data": {
+          "key": "\"0x619dc29a0aac8fa146714058e8dd6d2d0f3bdf5f6331907bf91f3acd81e6935\"",
+          "keyType": "address",
+          "value": "\"113111465462416154\"",
+          "valueType": "u128"
+        }
+      }
+    }
+  ]
+}

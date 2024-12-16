@@ -191,15 +191,15 @@ async fn insert_to_db(
             per_table_chunk_sizes,
         ),
     );
-    let ta_v2 = execute_in_chunks(
-        conn.clone(),
-        insert_token_activities_v2_query,
-        token_activities_v2,
-        get_config_table_chunk_size::<TokenActivityV2>(
-            "token_activities_v2",
-            per_table_chunk_sizes,
-        ),
-    );
+    // let ta_v2 = execute_in_chunks(
+    //     conn.clone(),
+    //     insert_token_activities_v2_query,
+    //     token_activities_v2,
+    //     get_config_table_chunk_size::<TokenActivityV2>(
+    //         "token_activities_v2",
+    //         per_table_chunk_sizes,
+    //     ),
+    // );
     let ct_v2 = execute_in_chunks(
         conn.clone(),
         insert_current_token_v2_metadatas_query,
@@ -237,13 +237,13 @@ async fn insert_to_db(
         cdtd_v2_res,
         cto_v2_res,
         cdto_v2_res,
-        ta_v2_res,
+        // ta_v2_res,
         ct_v2_res,
         ctr_v1_res,
         ctc_v1_res,
     ) = tokio::join!(
-        coll_v2, td_v2, to_v2, cc_v2, ctd_v2, cdtd_v2, cto_v2, cdto_v2, ta_v2, ct_v2, ctr_v1,
-        ctc_v1
+        // coll_v2, td_v2, to_v2, cc_v2, ctd_v2, cdtd_v2, cto_v2, cdto_v2, ta_v2, ct_v2, ctr_v1,
+        coll_v2, td_v2, to_v2, cc_v2, ctd_v2, cdtd_v2, cto_v2, cdto_v2, ct_v2, ctr_v1, ctc_v1
     );
 
     for res in [
@@ -255,7 +255,7 @@ async fn insert_to_db(
         cdtd_v2_res,
         cto_v2_res,
         cdto_v2_res,
-        ta_v2_res,
+        // ta_v2_res,
         ct_v2_res,
         ctr_v1_res,
         ctc_v1_res,
@@ -476,26 +476,26 @@ pub fn insert_current_deleted_token_ownerships_v2_query(
     )
 }
 
-pub fn insert_token_activities_v2_query(
-    items_to_insert: Vec<TokenActivityV2>,
-) -> (
-    impl QueryFragment<Pg> + diesel::query_builder::QueryId + Send,
-    Option<&'static str>,
-) {
-    use schema::token_activities_v2::dsl::*;
+// pub fn insert_token_activities_v2_query(
+//     items_to_insert: Vec<TokenActivityV2>,
+// ) -> (
+//     impl QueryFragment<Pg> + diesel::query_builder::QueryId + Send,
+//     Option<&'static str>,
+// ) {
+//     use schema::token_activities_v2::dsl::*;
 
-    (
-        diesel::insert_into(schema::token_activities_v2::table)
-            .values(items_to_insert)
-            .on_conflict((transaction_version, event_index))
-            .do_update()
-            .set((
-                is_fungible_v2.eq(excluded(is_fungible_v2)),
-                inserted_at.eq(excluded(inserted_at)),
-            )),
-        None,
-    )
-}
+//     (
+//         diesel::insert_into(schema::token_activities_v2::table)
+//             .values(items_to_insert)
+//             .on_conflict((transaction_version, event_index))
+//             .do_update()
+//             .set((
+//                 is_fungible_v2.eq(excluded(is_fungible_v2)),
+//                 inserted_at.eq(excluded(inserted_at)),
+//             )),
+//         None,
+//     )
+// }
 
 pub fn insert_current_token_v2_metadatas_query(
     items_to_insert: Vec<CurrentTokenV2Metadata>,
@@ -610,7 +610,7 @@ impl ProcessorTrait for TokenV2Processor {
             current_deleted_token_datas_v2,
             current_token_ownerships_v2,
             current_deleted_token_ownerships_v2,
-            token_activities_v2,
+            // token_activities_v2,
             mut current_token_v2_metadata,
             current_token_royalties_v1,
             current_token_claims,
@@ -645,50 +645,52 @@ impl ProcessorTrait for TokenV2Processor {
             current_token_v2_metadata.clear();
         }
 
-        let tx_result = insert_to_db(
-            self.get_pool(),
-            self.name(),
-            start_version,
-            end_version,
-            &collections_v2,
-            &token_datas_v2,
-            &token_ownerships_v2,
-            &current_collections_v2,
-            (&current_token_datas_v2, &current_deleted_token_datas_v2),
-            (
-                &current_token_ownerships_v2,
-                &current_deleted_token_ownerships_v2,
-            ),
-            &token_activities_v2,
-            &current_token_v2_metadata,
-            &current_token_royalties_v1,
-            &current_token_claims,
-            &self.per_table_chunk_sizes,
-        )
-        .await;
+        // let tx_result = insert_to_db(
+        //     self.get_pool(),
+        //     self.name(),
+        //     start_version,
+        //     end_version,
+        //     &collections_v2,
+        //     &token_datas_v2,
+        //     &token_ownerships_v2,
+        //     &current_collections_v2,
+        //     (&current_token_datas_v2, &current_deleted_token_datas_v2),
+        //     (
+        //         &current_token_ownerships_v2,
+        //         &current_deleted_token_ownerships_v2,
+        //     ),
+        //     &token_activities_v2,
+        //     &current_token_v2_metadata,
+        //     &current_token_royalties_v1,
+        //     &current_token_claims,
+        //     &self.per_table_chunk_sizes,
+        // )
+        // .await;
 
-        let db_insertion_duration_in_secs = db_insertion_start.elapsed().as_secs_f64();
-        match tx_result {
-            Ok(_) => Ok(ProcessingResult::DefaultProcessingResult(
-                DefaultProcessingResult {
-                    start_version,
-                    end_version,
-                    processing_duration_in_secs,
-                    db_insertion_duration_in_secs,
-                    last_transaction_timestamp,
-                },
-            )),
-            Err(e) => {
-                error!(
-                    start_version = start_version,
-                    end_version = end_version,
-                    processor_name = self.name(),
-                    error = ?e,
-                    "[Parser] Error inserting transactions to db",
-                );
-                bail!(e)
-            },
-        }
+        // let db_insertion_duration_in_secs = db_insertion_start.elapsed().as_secs_f64();
+        // match tx_result {
+        //     Ok(_) => Ok(ProcessingResult::DefaultProcessingResult(
+        //         DefaultProcessingResult {
+        //             start_version,
+        //             end_version,
+        //             processing_duration_in_secs,
+        //             db_insertion_duration_in_secs,
+        //             last_transaction_timestamp,
+        //         },
+        //     )),
+        //     Err(e) => {
+        //         error!(
+        //             start_version = start_version,
+        //             end_version = end_version,
+        //             processor_name = self.name(),
+        //             error = ?e,
+        //             "[Parser] Error inserting transactions to db",
+        //         );
+        //         bail!(e)
+        //     },
+        // }
+
+        bail!("Not implemented")
     }
 
     fn connection_pool(&self) -> &ArcDbPool {
@@ -711,7 +713,7 @@ pub async fn parse_v2_token(
     Vec<CurrentTokenDataV2>,
     Vec<CurrentTokenOwnershipV2>,
     Vec<CurrentTokenOwnershipV2>, // deleted token ownerships
-    Vec<TokenActivityV2>,
+    // Vec<TokenActivityV2>,
     Vec<CurrentTokenV2Metadata>,
     Vec<CurrentTokenRoyaltyV1>,
     Vec<CurrentTokenPendingClaim>,
@@ -901,7 +903,6 @@ pub async fn parse_v2_token(
                     &entry_function_id_str,
                     &token_v2_metadata_helper,
                 )
-                .await
                 .unwrap()
                 {
                     token_activities_v2.push(event);
@@ -1298,7 +1299,7 @@ pub async fn parse_v2_token(
         current_deleted_token_datas_v2,
         current_token_ownerships_v2,
         current_deleted_token_ownerships_v2,
-        token_activities_v2,
+        // token_activities_v2,
         current_token_v2_metadata,
         current_token_royalties_v1,
         all_current_token_claims,

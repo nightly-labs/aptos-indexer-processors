@@ -329,29 +329,29 @@ async fn parse_activities(
                         .and_modify(|e| *e += 1)
                         .or_insert(1);
                 }
-                if let Some(v2_activity) = FungibleAssetActivity::get_v2_from_event(
-                    event,
-                    txn_version,
-                    block_height,
-                    txn_timestamp,
-                    index as i64,
-                    &entry_function_id_str,
-                    &fungible_asset_object_helper,
-                )
-                .unwrap_or_else(|e| {
-                    tracing::error!(
-                        transaction_version = txn_version,
-                        index = index,
-                        error = ?e,
-                        "[Parser] error parsing fungible asset activity v2");
-                    panic!("[Parser] error parsing fungible asset activity v2");
-                }) {
-                    fungible_asset_activities.push(v2_activity);
-                    transaction_version_to_struct_count
-                        .entry(txn_version)
-                        .and_modify(|e| *e += 1)
-                        .or_insert(1);
-                }
+                // if let Some(v2_activity) = FungibleAssetActivity::get_v2_from_event(
+                //     event,
+                //     txn_version,
+                //     block_height,
+                //     txn_timestamp,
+                //     index as i64,
+                //     &entry_function_id_str,
+                //     &fungible_asset_object_helper,
+                // )
+                // .unwrap_or_else(|e| {
+                //     tracing::error!(
+                //         transaction_version = txn_version,
+                //         index = index,
+                //         error = ?e,
+                //         "[Parser] error parsing fungible asset activity v2");
+                //     panic!("[Parser] error parsing fungible asset activity v2");
+                // }) {
+                //     fungible_asset_activities.push(v2_activity);
+                //     transaction_version_to_struct_count
+                //         .entry(txn_version)
+                //         .and_modify(|e| *e += 1)
+                //         .or_insert(1);
+                // }
             }
 
             fungible_asset_activities

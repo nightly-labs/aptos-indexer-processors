@@ -1,0 +1,32 @@
+[
+  {
+    "key": {
+      "accountAddress": "0x0"
+    },
+    "type": {
+      "type": "MOVE_TYPES_STRUCT",
+      "struct": {
+        "address": "0xd0995d57c9d4839dcecfdbb34a2650172a69fcfe0444f3229fec90eddf945141",
+        "module": "nudge",
+        "name": "NudgeEvent"
+      }
+    },
+    "typeStr": "0xd0995d57c9d4839dcecfdbb34a2650172a69fcfe0444f3229fec90eddf945141::nudge::NudgeEvent",
+    "data": "{\"initial_recipient\":\"0xacf601d976f426394bc2e05cb943187cac5fee70ce00e2c861ed78528edeec\",\"initial_sender\":\"0xdd284fb30311654251f1bc7ee9293962e1f28177534a56185ad5a553a72ed911\",\"initial_sender_is_next_nudger\":false,\"times_nudged\":\"11\"}"
+  },
+  {
+    "key": {
+      "accountAddress": "0x0"
+    },
+    "type": {
+      "type": "MOVE_TYPES_STRUCT",
+      "struct": {
+        "address": "0x1",
+        "module": "transaction_fee",
+        "name": "FeeStatement"
+      }
+    },
+    "typeStr": "0x1::transaction_fee::FeeStatement",
+    "data": "{\"execution_gas_units\":\"6\",\"io_gas_units\":\"6\",\"storage_fee_octas\":\"0\",\"storage_fee_refund_octas\":\"0\",\"total_charge_gas_units\":\"12\"}"
+  }
+]

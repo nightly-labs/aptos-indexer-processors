@@ -1,6 +1,5 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
-
 use crate::{
     config::IndexerGrpcHttp2Config,
     db::postgres::models::{ledger_info::LedgerInfo, processor_status::ProcessorStatusQuery},
@@ -9,30 +8,17 @@ use crate::{
         parquet_gap_detector::ParquetFileGapDetectorInner, GapDetector, ProcessingResult,
     },
     grpc_stream::TransactionsPBResponse,
+    nats_queue::{nats_queue, NatsQueueSender},
     processors::{
-        account_transactions_processor::AccountTransactionsProcessor,
-        ans_processor::AnsProcessor,
-        default_processor::DefaultProcessor,
-        events_processor::EventsProcessor,
+        account_transactions_processor::AccountTransactionsProcessor, ans_processor::AnsProcessor,
+        default_processor::DefaultProcessor, events_processor::EventsProcessor,
         fungible_asset_processor::FungibleAssetProcessor,
-        monitoring_processor::MonitoringProcessor,
-        nft_metadata_processor::NftMetadataProcessor,
-        objects_processor::ObjectsProcessor,
-        parquet_processors::{
-            parquet_ans_processor::ParquetAnsProcessor,
-            parquet_default_processor::ParquetDefaultProcessor,
-            parquet_events_processor::ParquetEventsProcessor,
-            parquet_fungible_asset_activities_processor::ParquetFungibleAssetActivitiesProcessor,
-            parquet_fungible_asset_processor::ParquetFungibleAssetProcessor,
-            parquet_token_v2_processor::ParquetTokenV2Processor,
-            parquet_transaction_metadata_processor::ParquetTransactionMetadataProcessor,
-            parquet_user_transactions_processor::ParquetUserTransactionsProcessor,
-        },
-        stake_processor::StakeProcessor,
-        token_v2_processor::TokenV2Processor,
+        monitoring_processor::MonitoringProcessor, nft_metadata_processor::NftMetadataProcessor,
+        nightly_processor::NightlyProcessor, objects_processor::ObjectsProcessor,
+        stake_processor::StakeProcessor, token_v2_processor::TokenV2Processor,
         transaction_metadata_processor::TransactionMetadataProcessor,
-        user_transaction_processor::UserTransactionProcessor,
-        DefaultProcessingResult, Processor, ProcessorConfig, ProcessorTrait,
+        user_transaction_processor::UserTransactionProcessor, DefaultProcessingResult, Processor,
+        ProcessorConfig, ProcessorTrait,
     },
     schema::ledger_infos,
     transaction_filter::TransactionFilter,
@@ -57,6 +43,8 @@ use anyhow::{Context, Result};
 use aptos_moving_average::MovingAverage;
 use bitflags::bitflags;
 use kanal::AsyncSender;
+use odin::ConnectOptions;
+use odin::Odin;
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
@@ -339,12 +327,32 @@ impl Worker {
             (None, gap_detection_batch_size)
         };
 
+        // TODO update on launch
+        let odin = Odin::connect(
+            Some(vec![
+                "nats://localhost:4228".to_string(),
+                "nats://localhost:4229".to_string(),
+            ]),
+            Some(ConnectOptions::with_user_and_password(
+                "alexandria".to_string(),
+                "alexandria".to_string(),
+            )),
+        )
+        .await;
+
+        let odin_connection: Arc<Odin> = Arc::new(odin);
+        let mut queue = nats_queue(odin_connection.clone());
+        queue.run().await;
+
+        let queue_sender = Arc::new(queue);
+
         let processor = build_processor(
             &self.processor_config,
             self.per_table_chunk_sizes.clone(),
             self.deprecated_tables,
             self.db_pool.clone(),
             maybe_gap_detector_sender,
+            Some(queue_sender.clone()),
         );
 
         let gap_detector = if is_parquet_processor {
@@ -389,6 +397,7 @@ impl Worker {
                     receiver.clone(),
                     gap_detector_sender.clone(),
                     gap_detector.clone(),
+                    queue_sender.clone(),
                 )
                 .await;
             processor_tasks.push(join_handle);
@@ -414,6 +423,7 @@ impl Worker {
         receiver: kanal::AsyncReceiver<TransactionsPBResponse>,
         gap_detector_sender: AsyncSender<ProcessingResult>,
         mut gap_detector: GapDetector,
+        queue_sender: Arc<NatsQueueSender>,
     ) -> JoinHandle<()> {
         let processor_name = self.processor_config.name();
         let stream_address = self.indexer_grpc_data_service_address.to_string();
@@ -428,6 +438,7 @@ impl Worker {
                 self.deprecated_tables,
                 self.db_pool.clone(),
                 Some(gap_detector_sender.clone()),
+                Some(queue_sender),
             )
         } else {
             build_processor(
@@ -436,6 +447,7 @@ impl Worker {
                 self.deprecated_tables,
                 self.db_pool.clone(),
                 None,
+                Some(queue_sender),
             )
         };
 
@@ -901,20 +913,20 @@ pub async fn do_processor(
     processed_result
 }
 
-pub fn build_processor_for_testing(
-    processor_config: ProcessorConfig,
-    db_pool: ArcDbPool,
-) -> Processor {
-    let per_table_chunk_sizes = AHashMap::new();
-    let deprecated_tables = TableFlags::empty();
-    build_processor(
-        &processor_config,
-        per_table_chunk_sizes,
-        deprecated_tables,
-        db_pool,
-        None,
-    )
-}
+// pub fn build_processor_for_testing(
+//     processor_config: ProcessorConfig,
+//     db_pool: ArcDbPool,
+// ) -> Processor {
+//     let per_table_chunk_sizes = AHashMap::new();
+//     let deprecated_tables = TableFlags::empty();
+//     build_processor(
+//         &processor_config,
+//         per_table_chunk_sizes,
+//         deprecated_tables,
+//         db_pool,
+//         None,
+//     )
+// }
 
 /// Given a config and a db pool, build a concrete instance of a processor.
 // As time goes on there might be other things that we need to provide to certain
@@ -927,6 +939,7 @@ pub fn build_processor(
     deprecated_tables: TableFlags,
     db_pool: ArcDbPool,
     gap_detector_sender: Option<AsyncSender<ProcessingResult>>, // Parquet only
+    nats_queue_sender: Option<Arc<NatsQueueSender>>,
 ) -> Processor {
     match config {
         ProcessorConfig::AccountTransactionsProcessor => Processor::from(
@@ -978,59 +991,64 @@ pub fn build_processor(
         ProcessorConfig::UserTransactionProcessor => Processor::from(
             UserTransactionProcessor::new(db_pool, per_table_chunk_sizes, deprecated_tables),
         ),
-        ProcessorConfig::ParquetDefaultProcessor(config) => {
-            Processor::from(ParquetDefaultProcessor::new(
-                db_pool,
-                config.clone(),
-                gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
-            ))
-        },
-        ProcessorConfig::ParquetFungibleAssetProcessor(config) => {
-            Processor::from(ParquetFungibleAssetProcessor::new(
-                db_pool,
-                config.clone(),
-                gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
-            ))
-        },
-        ProcessorConfig::ParquetTransactionMetadataProcessor(config) => {
-            Processor::from(ParquetTransactionMetadataProcessor::new(
-                db_pool,
-                config.clone(),
-                gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
-            ))
-        },
-        ProcessorConfig::ParquetTokenV2Processor(config) => {
-            Processor::from(ParquetTokenV2Processor::new(
-                db_pool,
-                config.clone(),
-                gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
-            ))
-        },
-        ProcessorConfig::ParquetEventsProcessor(config) => {
-            Processor::from(ParquetEventsProcessor::new(
-                db_pool,
-                config.clone(),
-                gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
-            ))
-        },
-        ProcessorConfig::ParquetAnsProcessor(config) => Processor::from(ParquetAnsProcessor::new(
+        ProcessorConfig::NightlyProcessor(config) => Processor::from(NightlyProcessor::new(
             db_pool,
             config.clone(),
-            gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+            nats_queue_sender.expect("Nightly processor requires a nats queue sender"),
         )),
-        ProcessorConfig::ParquetFungibleAssetActivitiesProcessor(config) => {
-            Processor::from(ParquetFungibleAssetActivitiesProcessor::new(
-                db_pool,
-                config.clone(),
-                gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
-            ))
-        },
-        ProcessorConfig::ParquetUserTransactionsProcessor(config) => {
-            Processor::from(ParquetUserTransactionsProcessor::new(
-                db_pool,
-                config.clone(),
-                gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
-            ))
-        },
+        // ProcessorConfig::ParquetDefaultProcessor(config) => {
+        //     Processor::from(ParquetDefaultProcessor::new(
+        //         db_pool,
+        //         config.clone(),
+        //         gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+        //     ))
+        // },
+        // ProcessorConfig::ParquetFungibleAssetProcessor(config) => {
+        //     Processor::from(ParquetFungibleAssetProcessor::new(
+        //         db_pool,
+        //         config.clone(),
+        //         gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+        //     ))
+        // },
+        // ProcessorConfig::ParquetTransactionMetadataProcessor(config) => {
+        //     Processor::from(ParquetTransactionMetadataProcessor::new(
+        //         db_pool,
+        //         config.clone(),
+        //         gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+        //     ))
+        // },
+        // ProcessorConfig::ParquetTokenV2Processor(config) => {
+        //     Processor::from(ParquetTokenV2Processor::new(
+        //         db_pool,
+        //         config.clone(),
+        //         gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+        //     ))
+        // },
+        // ProcessorConfig::ParquetEventsProcessor(config) => {
+        //     Processor::from(ParquetEventsProcessor::new(
+        //         db_pool,
+        //         config.clone(),
+        //         gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+        //     ))
+        // },
+        // ProcessorConfig::ParquetAnsProcessor(config) => Processor::from(ParquetAnsProcessor::new(
+        //     db_pool,
+        //     config.clone(),
+        //     gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+        // )),
+        // ProcessorConfig::ParquetFungibleAssetActivitiesProcessor(config) => {
+        //     Processor::from(ParquetFungibleAssetActivitiesProcessor::new(
+        //         db_pool,
+        //         config.clone(),
+        //         gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+        //     ))
+        // },
+        // ProcessorConfig::ParquetUserTransactionsProcessor(config) => {
+        //     Processor::from(ParquetUserTransactionsProcessor::new(
+        //         db_pool,
+        //         config.clone(),
+        //         gap_detector_sender.expect("Parquet processor requires a gap detector sender"),
+        //     ))
+        // },
     }
 }

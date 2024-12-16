@@ -96,15 +96,15 @@ async fn insert_to_db(
         "Inserting to db",
     );
 
-    let faa = execute_in_chunks(
-        conn.clone(),
-        insert_fungible_asset_activities_query,
-        fungible_asset_activities,
-        get_config_table_chunk_size::<FungibleAssetActivity>(
-            "fungible_asset_activities",
-            per_table_chunk_sizes,
-        ),
-    );
+    // let faa = execute_in_chunks(
+    //     conn.clone(),
+    //     insert_fungible_asset_activities_query,
+    //     fungible_asset_activities,
+    //     get_config_table_chunk_size::<FungibleAssetActivity>(
+    //         "fungible_asset_activities",
+    //         per_table_chunk_sizes,
+    //     ),
+    // );
     let fam = execute_in_chunks(
         conn.clone(),
         insert_fungible_asset_metadata_query,
@@ -156,10 +156,13 @@ async fn insert_to_db(
         coin_supply,
         get_config_table_chunk_size::<CoinSupply>("coin_supply", per_table_chunk_sizes),
     );
-    let (faa_res, fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res) =
-        tokio::join!(faa, fam, fab, cfab, cufab_v1, cufab_v2, cs);
+    // let (faa_res, fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res) =
+    // tokio::join!(faa, fam, fab, cfab, cufab_v1, cufab_v2, cs);
+    let (fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res) =
+        tokio::join!(fam, fab, cfab, cufab_v1, cufab_v2, cs);
     for res in [
-        faa_res, fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res,
+        // faa_res, fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res,
+        fam_res, fab_res, cfab_res, cufab1_res, cufab2_res, cs_res,
     ] {
         res?;
     }
@@ -167,22 +170,22 @@ async fn insert_to_db(
     Ok(())
 }
 
-pub fn insert_fungible_asset_activities_query(
-    items_to_insert: Vec<FungibleAssetActivity>,
-) -> (
-    impl QueryFragment<Pg> + diesel::query_builder::QueryId + Send,
-    Option<&'static str>,
-) {
-    use schema::fungible_asset_activities::dsl::*;
+// pub fn insert_fungible_asset_activities_query(
+//     items_to_insert: Vec<FungibleAssetActivity>,
+// ) -> (
+//     impl QueryFragment<Pg> + diesel::query_builder::QueryId + Send,
+//     Option<&'static str>,
+// ) {
+//     use schema::fungible_asset_activities::dsl::*;
 
-    (
-        diesel::insert_into(schema::fungible_asset_activities::table)
-            .values(items_to_insert)
-            .on_conflict((transaction_version, event_index))
-            .do_nothing(),
-        None,
-    )
-}
+//     (
+//         diesel::insert_into(schema::fungible_asset_activities::table)
+//             .values(items_to_insert)
+//             .on_conflict((transaction_version, event_index))
+//             .do_nothing(),
+//         None,
+//     )
+// }
 
 pub fn insert_fungible_asset_metadata_query(
     items_to_insert: Vec<FungibleAssetMetadataModel>,
@@ -651,7 +654,7 @@ pub async fn parse_v2_coin(
                         "[Parser] error parsing fungible asset activity v1");
                     panic!("[Parser] error parsing fungible asset activity v1");
                 }) {
-                    fungible_asset_activities.push(v1_activity);
+                    // fungible_asset_activities.push(v1_activity);
                 }
                 if let Some(v2_activity) = FungibleAssetActivity::get_v2_from_event(
                     event,
@@ -670,7 +673,7 @@ pub async fn parse_v2_coin(
                         "[Parser] error parsing fungible asset activity v2");
                     panic!("[Parser] error parsing fungible asset activity v2");
                 }) {
-                    fungible_asset_activities.push(v2_activity);
+                    // fungible_asset_activities.push(v2_activity);
                 }
             }
 

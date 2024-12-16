@@ -11,8 +11,10 @@ pub mod events_processor;
 pub mod fungible_asset_processor;
 pub mod monitoring_processor;
 pub mod nft_metadata_processor;
+pub mod nightly_processor;
+pub mod nightly_processors_helpers;
 pub mod objects_processor;
-pub mod parquet_processors;
+// pub mod parquet_processors;
 pub mod stake_processor;
 pub mod token_v2_processor;
 pub mod transaction_metadata_processor;
@@ -35,24 +37,24 @@ use self::{
 use crate::{
     db::postgres::models::processor_status::ProcessorStatus,
     gap_detectors::ProcessingResult,
-    processors::parquet_processors::{
-        parquet_ans_processor::{ParquetAnsProcessor, ParquetAnsProcessorConfig},
-        parquet_default_processor::{ParquetDefaultProcessor, ParquetDefaultProcessorConfig},
-        parquet_events_processor::{ParquetEventsProcessor, ParquetEventsProcessorConfig},
-        parquet_fungible_asset_activities_processor::{
-            ParquetFungibleAssetActivitiesProcessor, ParquetFungibleAssetActivitiesProcessorConfig,
-        },
-        parquet_fungible_asset_processor::{
-            ParquetFungibleAssetProcessor, ParquetFungibleAssetProcessorConfig,
-        },
-        parquet_token_v2_processor::{ParquetTokenV2Processor, ParquetTokenV2ProcessorConfig},
-        parquet_transaction_metadata_processor::{
-            ParquetTransactionMetadataProcessor, ParquetTransactionMetadataProcessorConfig,
-        },
-        parquet_user_transactions_processor::{
-            ParquetUserTransactionsProcessor, ParquetUserTransactionsProcessorConfig,
-        },
-    },
+    // processors::parquet_processors::{
+    //     parquet_ans_processor::{ParquetAnsProcessor, ParquetAnsProcessorConfig},
+    //     parquet_default_processor::{ParquetDefaultProcessor, ParquetDefaultProcessorConfig},
+    //     parquet_events_processor::{ParquetEventsProcessor, ParquetEventsProcessorConfig},
+    //     parquet_fungible_asset_activities_processor::{
+    //         ParquetFungibleAssetActivitiesProcessor, ParquetFungibleAssetActivitiesProcessorConfig,
+    //     },
+    //     parquet_fungible_asset_processor::{
+    //         ParquetFungibleAssetProcessor, ParquetFungibleAssetProcessorConfig,
+    //     },
+    //     parquet_token_v2_processor::{ParquetTokenV2Processor, ParquetTokenV2ProcessorConfig},
+    //     parquet_transaction_metadata_processor::{
+    //         ParquetTransactionMetadataProcessor, ParquetTransactionMetadataProcessorConfig,
+    //     },
+    //     parquet_user_transactions_processor::{
+    //         ParquetUserTransactionsProcessor, ParquetUserTransactionsProcessorConfig,
+    //     },
+    // },
     schema::processor_status,
     utils::{
         counters::{GOT_CONNECTION_COUNT, UNABLE_TO_GET_CONNECTION_COUNT},
@@ -64,6 +66,7 @@ use aptos_protos::transaction::v1::Transaction as ProtoTransaction;
 use async_trait::async_trait;
 use diesel::{pg::upsert::excluded, ExpressionMethods};
 use enum_dispatch::enum_dispatch;
+use nightly_processor::{NightlyProcessor, NightlyProcessorConfig};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -207,14 +210,15 @@ pub enum ProcessorConfig {
     TokenV2Processor(TokenV2ProcessorConfig),
     TransactionMetadataProcessor,
     UserTransactionProcessor,
-    ParquetDefaultProcessor(ParquetDefaultProcessorConfig),
-    ParquetFungibleAssetActivitiesProcessor(ParquetFungibleAssetActivitiesProcessorConfig),
-    ParquetFungibleAssetProcessor(ParquetFungibleAssetProcessorConfig),
-    ParquetTransactionMetadataProcessor(ParquetTransactionMetadataProcessorConfig),
-    ParquetAnsProcessor(ParquetAnsProcessorConfig),
-    ParquetEventsProcessor(ParquetEventsProcessorConfig),
-    ParquetTokenV2Processor(ParquetTokenV2ProcessorConfig),
-    ParquetUserTransactionsProcessor(ParquetUserTransactionsProcessorConfig),
+    NightlyProcessor(NightlyProcessorConfig),
+    // ParquetDefaultProcessor(ParquetDefaultProcessorConfig),
+    // ParquetFungibleAssetActivitiesProcessor(ParquetFungibleAssetActivitiesProcessorConfig),
+    // ParquetFungibleAssetProcessor(ParquetFungibleAssetProcessorConfig),
+    // ParquetTransactionMetadataProcessor(ParquetTransactionMetadataProcessorConfig),
+    // ParquetAnsProcessor(ParquetAnsProcessorConfig),
+    // ParquetEventsProcessor(ParquetEventsProcessorConfig),
+    // ParquetTokenV2Processor(ParquetTokenV2ProcessorConfig),
+    // ParquetUserTransactionsProcessor(ParquetUserTransactionsProcessorConfig),
 }
 
 impl ProcessorConfig {
@@ -225,17 +229,18 @@ impl ProcessorConfig {
     }
 
     pub fn is_parquet_processor(&self) -> bool {
-        matches!(
-            self,
-            ProcessorConfig::ParquetDefaultProcessor(_)
-                | ProcessorConfig::ParquetFungibleAssetProcessor(_)
-                | ProcessorConfig::ParquetTransactionMetadataProcessor(_)
-                | ProcessorConfig::ParquetAnsProcessor(_)
-                | ProcessorConfig::ParquetEventsProcessor(_)
-                | ProcessorConfig::ParquetTokenV2Processor(_)
-                | ProcessorConfig::ParquetFungibleAssetActivitiesProcessor(_)
-                | ProcessorConfig::ParquetUserTransactionsProcessor(_)
-        )
+        // matches!(
+        //     self,
+        //     ProcessorConfig::ParquetDefaultProcessor(_)
+        //         | ProcessorConfig::ParquetFungibleAssetProcessor(_)
+        //         | ProcessorConfig::ParquetTransactionMetadataProcessor(_)
+        //         | ProcessorConfig::ParquetAnsProcessor(_)
+        //         | ProcessorConfig::ParquetEventsProcessor(_)
+        //         | ProcessorConfig::ParquetTokenV2Processor(_)
+        //         | ProcessorConfig::ParquetFungibleAssetActivitiesProcessor(_)
+        //         | ProcessorConfig::ParquetUserTransactionsProcessor(_)
+        // )
+        false
     }
 }
 
@@ -271,15 +276,16 @@ pub enum Processor {
     TokenV2Processor,
     TransactionMetadataProcessor,
     UserTransactionProcessor,
-    // Parquet processors
-    ParquetDefaultProcessor,
-    ParquetFungibleAssetActivitiesProcessor,
-    ParquetFungibleAssetProcessor,
-    ParquetTransactionMetadataProcessor,
-    ParquetAnsProcessor,
-    ParquetEventsProcessor,
-    ParquetTokenV2Processor,
-    ParquetUserTransactionsProcessor,
+    NightlyProcessor,
+    // // Parquet processors
+    // ParquetDefaultProcessor,
+    // ParquetFungibleAssetActivitiesProcessor,
+    // ParquetFungibleAssetProcessor,
+    // ParquetTransactionMetadataProcessor,
+    // ParquetAnsProcessor,
+    // ParquetEventsProcessor,
+    // ParquetTokenV2Processor,
+    // ParquetUserTransactionsProcessor,
 }
 
 #[cfg(test)]
