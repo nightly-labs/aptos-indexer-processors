@@ -66,24 +66,24 @@ pub fn process_changes(
                 let mut transaction_notifications = Vec::new();
 
                 // Process gas event
-                let (gas_type, gas_amount) = if let Some(gas_event) = coin_changes.gas_event.clone()
-                {
-                    process_gas_event(
-                        tx_version,
-                        gas_event,
-                        &mut ws_transaction_account_coin_updates,
-                    )
-                } else {
-                    if !coin_changes.asset_balances.is_empty()
-                        && !coin_changes.asset_activities.is_empty()
-                    {
-                        warn!(
-                            "Missing gas event for transaction {txn_version}",
-                            txn_version = tx_version
-                        );
-                    }
-                    return (tx_version as u64, Vec::new(), Vec::new());
-                };
+                let (gas_type, gas_amount, gas_payee) =
+                    if let Some(gas_event) = coin_changes.gas_event.clone() {
+                        process_gas_event(
+                            tx_version,
+                            gas_event,
+                            &mut ws_transaction_account_coin_updates,
+                        )
+                    } else {
+                        if !coin_changes.asset_balances.is_empty()
+                            && !coin_changes.asset_activities.is_empty()
+                        {
+                            warn!(
+                                "Missing gas event for transaction {txn_version}",
+                                txn_version = tx_version
+                            );
+                        }
+                        return (tx_version as u64, Vec::new(), Vec::new());
+                    };
 
                 // Process coin changes
                 process_coin_changes(
@@ -103,6 +103,7 @@ pub fn process_changes(
                     &mut transaction_notifications,
                     &gas_type,
                     gas_amount,
+                    &gas_payee,
                 );
 
                 // Convert to final format
@@ -124,18 +125,10 @@ pub fn process_changes(
     let mut ws_updates = Vec::new();
     let mut notifications = Vec::new();
 
-    // for (version, updates, notifs) in processed_results {
-    //     if version == 2042810917 {
-    //         println!("\n\nFOUND     : {}", version);
-    //         println!("\n\nws UPDATES: {:#?}", updates);
-    //         println!("\n\nNOTIFICATIONS: {:#?}", notifs);
-
-    //         panic!("Stop here");
-    //     }
-
-    //     ws_updates.push((version, updates));
-    //     notifications.push((version, notifs));
-    // }
+    for (version, updates, notifs) in processed_results {
+        ws_updates.push((version, updates));
+        notifications.push((version, notifs));
+    }
 
     (ws_updates, notifications)
 }
@@ -145,7 +138,7 @@ fn process_gas_event(
     tx_version: i64,
     gas_event: FungibleAssetActivity,
     ws_updates: &mut AHashMap<String, AptosCoinBalanceUpdate>,
-) -> (String, i128) {
+) -> (String, i128, String) {
     let coin_type = match gas_event.asset_type.clone() {
         Some(asset_type) => asset_type,
         None => {
@@ -156,7 +149,7 @@ fn process_gas_event(
             PROCESSOR_UNKNOWN_TYPE_COUNT
                 .with_label_values(&["NightlyProcessor"])
                 .inc();
-            return (String::new(), 0);
+            return (String::new(), 0, String::new());
         },
     };
 
@@ -172,7 +165,7 @@ fn process_gas_event(
                 PROCESSOR_UNKNOWN_TYPE_COUNT
                     .with_label_values(&["NightlyProcessor"])
                     .inc();
-                return (coin_type, 0);
+                return (coin_type, 0, String::new());
             },
         },
     };
@@ -187,14 +180,14 @@ fn process_gas_event(
             PROCESSOR_UNKNOWN_TYPE_COUNT
                 .with_label_values(&["NightlyProcessor"])
                 .inc();
-            return (coin_type, 0);
+            return (coin_type, 0, owner_address);
         },
     };
 
     ws_updates
         .entry(owner_address.clone())
         .or_insert_with(|| AptosCoinBalanceUpdate {
-            aptos_address: owner_address,
+            aptos_address: owner_address.clone(),
             changed_balances: HashMap::new(),
             sequence_number: tx_version as u64,
             timestamp_ms: chrono::Utc::now().naive_utc().and_utc().timestamp_millis() as u64,
@@ -204,6 +197,7 @@ fn process_gas_event(
         .or_insert(vec![])
         .push(AptosCoinUpdate {
             coin_type: coin_type.clone(),
+            event_id: gas_event.event_index.to_string(),
             current_total_balance: gas_amount,
             standard: AptosCoinStandard::Coin,
             status: AptosCoinObjectUpdateStatus::Mutated(CoinMutated {
@@ -211,7 +205,7 @@ fn process_gas_event(
             }),
         });
 
-    (coin_type, gas_amount)
+    (coin_type, gas_amount, owner_address)
 }
 
 // Helper function to process coin changes
@@ -326,6 +320,7 @@ fn process_single_coin_activity(
         .or_insert(vec![])
         .push(AptosCoinUpdate {
             coin_type: coin_type.to_string(),
+            event_id: asset_activity.event_index.to_string(),
             current_total_balance: coin_balance_amount,
             standard: match asset_activity.token_standard {
                 TokenStandard::V1 => AptosCoinStandard::Coin,
@@ -727,6 +722,7 @@ fn generate_notifications(
     notifications: &mut Vec<AptosIndexerNotification>,
     gas_type: &str,
     gas_amount: i128,
+    gas_payee: &String,
 ) {
     // Generate coin notifications
     for (account_address, update) in coin_updates {
@@ -765,8 +761,9 @@ fn generate_notifications(
                 }
             }
 
-            if coin_type == gas_type {
+            if coin_type == gas_type && account_address == gas_payee {
                 let entry = aggregated_changes.entry(coin_type.clone()).or_insert(0);
+                // gas amount is negative
                 *entry += gas_amount;
             }
         }

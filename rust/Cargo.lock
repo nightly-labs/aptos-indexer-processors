@@ -2153,7 +2153,7 @@ dependencies = [
 [[package]]
 name = "odin"
 version = "0.1.0"
-source = "git+ssh://git@github.com/nightly-labs/alexandria.git?rev=a6f54d9714adcc60520c96e2c07799000560c9d3#a6f54d9714adcc60520c96e2c07799000560c9d3"
+source = "git+ssh://git@github.com/nightly-labs/alexandria.git?rev=a5178da2179b36e1b0e2d87e8eab57b72a6deb5e#a5178da2179b36e1b0e2d87e8eab57b72a6deb5e"
 dependencies = [
  "async-nats",
  "bitcode",
@@ -3485,7 +3485,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 [[package]]
 name = "structs"
 version = "0.1.0"
-source = "git+ssh://git@github.com/nightly-labs/alexandria.git?rev=a6f54d9714adcc60520c96e2c07799000560c9d3#a6f54d9714adcc60520c96e2c07799000560c9d3"
+source = "git+ssh://git@github.com/nightly-labs/alexandria.git?rev=a5178da2179b36e1b0e2d87e8eab57b72a6deb5e#a5178da2179b36e1b0e2d87e8eab57b72a6deb5e"
 dependencies = [
  "bitcode",
  "chrono",

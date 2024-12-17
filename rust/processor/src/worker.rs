@@ -251,7 +251,8 @@ impl Worker {
             "[Parser] Building processor",
         );
 
-        let concurrent_tasks = self.number_concurrent_processing_tasks;
+        // let concurrent_tasks = self.number_concurrent_processing_tasks;
+        let concurrent_tasks = 1;
 
         // get the chain id
         let chain_id = crate::grpc_stream::get_chain_id(
