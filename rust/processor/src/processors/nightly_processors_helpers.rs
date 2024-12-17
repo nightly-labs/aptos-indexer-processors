@@ -1,4 +1,6 @@
-use super::nightly_processor::{TransactionChanges, TransactionTokenChanges};
+use super::nightly_processor::{
+    Nudge as IndexerNudge, TransactionChanges, TransactionTokenChanges,
+};
 use crate::{
     db::postgres::models::{
         fungible_asset_models::{
@@ -17,7 +19,7 @@ use bigdecimal::{BigDecimal, ToPrimitive, Zero};
 use odin::structs::{
     notifications::aptos_notifications::{
         AptosIndexerNotification, CoinFrozen, CoinReceived, CoinSent, CoinSwap, NftBurned,
-        NftCancelClaim, NftClaim, NftMinted, NftOffer, NftReceived, NftSent,
+        NftCancelClaim, NftClaim, NftMinted, NftOffer, NftReceived, NftSent, Nudge,
     },
     ws::{
         aptos_ws::{
@@ -104,6 +106,7 @@ pub fn process_changes(
                     &gas_type,
                     gas_amount,
                     &gas_payee,
+                    &tx.nudge_events,
                 );
 
                 // Convert to final format
@@ -723,6 +726,7 @@ fn generate_notifications(
     gas_type: &str,
     gas_amount: i128,
     gas_payee: &String,
+    nudge_events: &Vec<IndexerNudge>,
 ) {
     // Generate coin notifications
     for (account_address, update) in coin_updates {
@@ -869,5 +873,13 @@ fn generate_notifications(
                 }
             }
         }
+    }
+
+    // Generate nudge notifications
+    for nudge in nudge_events {
+        notifications.push(AptosIndexerNotification::Nudge(Nudge {
+            sender: nudge.nudge_sender.clone(),
+            receiver: nudge.nudge_receiver.clone(),
+        }));
     }
 }
